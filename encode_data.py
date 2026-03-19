@@ -121,6 +121,68 @@ def snake_data(cfg):
 
 
 
+def tcga_data(cfg):
+    """Load and preprocess the TCGA genomics dataset.
+
+    Expects: data/tcga_combined_full_100f.csv
+      - 99 continuous gene-expression features + 1 categorical 'Subtype' column
+      - 1089 rows
+
+    All continuous features are discretized into C.n_bins equal-depth bins.
+    'Subtype' is kept as integers 0..K-1 via ordinal encoding.
+
+    cfg.pgm_target_variable is set to 'Subtype'.
+    """
+    csv_path = os.path.join(os.path.dirname(__file__), "data", "tcga_combined_full_100f.csv")
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(
+            f"TCGA dataset not found at {csv_path}\n"
+            f"Please copy tcga_combined_full_100f.csv into the data/ directory."
+        )
+
+    raw = pd.read_csv(csv_path)
+    target_col = "Subtype"
+    feature_cols = [c for c in raw.columns if c != target_col]
+
+    # Ordinal-encode the categorical Subtype label.
+    subtypes = sorted(raw[target_col].unique().tolist())
+    subtype_map = {s: i for i, s in enumerate(subtypes)}
+    raw[target_col] = raw[target_col].map(subtype_map)
+
+    columns = feature_cols + [target_col]
+    numeric_columns = feature_cols
+    catg_columns = []
+
+    # Equal-depth discretisation of continuous features (same as cali/berka).
+    fit_continuous_features_equaldepth(raw[feature_cols], "tcga")
+    aux = raw[feature_cols].copy()
+    aux = discretize_continuous_features_equaldepth(aux, "tcga")
+    aux[target_col] = raw[target_col].values
+
+    # Reprosyn metadata: every column gets domain 0..C.n_bins-1 for features,
+    # 0..K-1 for Subtype.
+    meta = [
+        {"name": col, "representation": list(range(C.n_bins))}
+        for col in feature_cols
+    ] + [
+        {"name": target_col, "representation": list(range(len(subtypes)))}
+    ]
+
+    # fit_discrete_features_evenly and fit_data_all_numeric for KDE / RAP paths.
+    fit_discrete_features_evenly("tcga", aux, pd.DataFrame(meta), columns)
+    fit_data_all_numeric("tcga", aux, meta, numeric_columns, catg_columns)
+
+    # Individual MI: HHID == row index.
+    aux["HHID"] = aux.index.values
+    aux.index = range(aux.shape[0])
+
+    cfg.numeric_columns = numeric_columns
+    cfg.categorical_columns = catg_columns
+    cfg.pgm_target_variable = target_col
+
+    return None, aux, columns, meta, "tcga"
+
+
 def convert_finite_ordered_to_numeric(df):
     meta = pd.read_json(DATA_DIR + "SNAKE/meta.json")
     df_new = df.copy()
