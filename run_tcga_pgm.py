@@ -48,9 +48,12 @@ n_runs     = int(sys.argv[3])   if len(sys.argv) > 3 else 10
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.append('reprosyn-main/src/reprosyn/methods/mbi/')
 
-# Ensure experiment_artifacts directory exists (needed by dump_artifact).
-os.makedirs("experiment_artifacts/focalpoints", exist_ok=True)
-os.makedirs("data", exist_ok=True)
+# Mirror the directory structure expected by mamamia_experiments.py.
+# DATA_DIR = "data/"  → artifacts go into data/experiment_artifacts/
+# DIR     = "intermediate" → focal-points go into intermediate/experiment_artifacts/focalpoints/
+os.makedirs("data/experiment_artifacts", exist_ok=True)
+os.makedirs("intermediate/experiment_artifacts/focalpoints", exist_ok=True)
+os.makedirs("intermediate/experiment_artifacts/satml25-rebuttal/mamamia_results", exist_ok=True)
 
 from util import *                          # Config, get_data, C, dump_artifact …
 from determine_focal_points import determine_privatepgm_marginals
@@ -87,7 +90,7 @@ print(f"  Subtype   : {aux['Subtype'].nunique()} classes, "
 # ---------------------------------------------------------------------------
 # Focal points  –  for Private-PGM these are deterministic.
 # ---------------------------------------------------------------------------
-fp_file = f"experiment_artifacts/focalpoints/FP_tcga_pgm_e{epsilon:.2f}"
+fp_file = f"intermediate/experiment_artifacts/focalpoints/FP_tcga_pgm_e{epsilon:.2f}"
 fps = determine_privatepgm_marginals(
     cfg, aux, columns, cfg.categorical_columns, meta,
     epsilon, train_size, filename=fp_file

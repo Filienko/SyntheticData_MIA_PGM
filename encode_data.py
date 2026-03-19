@@ -1,4 +1,5 @@
 import sys
+import os
 import numpy as np
 import json
 import math
@@ -133,7 +134,7 @@ def tcga_data(cfg):
 
     cfg.pgm_target_variable is set to 'Subtype'.
     """
-    csv_path = os.path.join(os.path.dirname(__file__), "data", "tcga_combined_full_100f.csv")
+    csv_path = DATA_DIR + "tcga_combined_full_100f.csv"
     if not os.path.exists(csv_path):
         raise FileNotFoundError(
             f"TCGA dataset not found at {csv_path}\n"
