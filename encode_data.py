@@ -19,7 +19,7 @@ import pandas as pd
 
 
 ## Specify directory to store results here
-DATA_DIR = "/Users/golobs/Documents/GradSchool/Thesis/"
+DATA_DIR = "data/"
 # DATA_DIR = "/home/azureuser/"
 # DATA_DIR = "/"
 

@@ -44,7 +44,8 @@ import psutil
 
 min_HH_size = 5
 
-DIR = "/Users/golobs/Documents/GradSchool/Thesis/"
+DIR = "intermediate"
+# DIR = "/Users/golobs/Documents/GradSchool/Thesis/"
 # DIR = "/home/golobs/"
 # DIR = "/"
 
