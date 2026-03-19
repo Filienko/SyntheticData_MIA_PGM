@@ -12,6 +12,7 @@ sys.path.append('reprosyn-main/src/reprosyn/methods/mbi/')
 
 import mst
 import privbayes
+import privatepgm as pgm_module
 
 sys.path.append('private_gsd/')
 from utils.utils_data import Dataset, Domain
@@ -480,6 +481,97 @@ def custom_rap_attack(cfg, eps, aux_encoded, synth, targets, targets_encoded, ta
 
     return score_attack(cfg, A, num_queries_used, targets, target_ids, membership), score_attack(cfg, A_sparse, num_queries_used_sparse, targets, target_ids, membership)
 
+
+
+## MAMA-MIA for Private-PGM
+##-------------------------
+
+
+def attack_privatepgm(cfg, meta, aux, columns, train, eps, targets, target_ids, membership, kde_sample_seed, fps, synth=None):
+    """MAMA-MIA attack against a Private-PGM synthesizer.
+
+    Private-PGM (model.py) measures a *fixed* set of marginals:
+      - all 1-way singletons
+      - all 2-way (col, target_variable) pairs
+
+    Because the measured cliques are deterministic (no exponential-mechanism
+    selection), the focal-point weights are all equal.  The attack score is
+    the same weighted likelihood-ratio sum used for MST, just evaluated on
+    this fixed clique set.
+
+    Parameters mirror those of ``attack_mst`` so this function slots directly
+    into the experiment loops in ``mamamia_experiments.py``.
+
+    Returns
+    -------
+    Tuple matching the 12-element return of ``attack_mst``:
+    (kde_ma, kde_auc, kde_time, mm_ma, mm_auc, mm_ma_w, mm_auc_w,
+     mm_time, mm_arbitrary_ma, distance, kde_roc, mm_roc)
+    """
+    target_var = getattr(cfg, 'pgm_target_variable', None) or columns[-1]
+
+    pgm_gen = pgm_module.PRIVATEPGM(
+        dataset=train[columns],
+        metadata=meta,
+        size=cfg.synth_size,
+        epsilon=eps,
+        target_variable=target_var,
+    )
+    try:
+        if synth is None:
+            pgm_gen.run()
+            synth = pgm_gen.output
+
+            if cfg.data_name == "snake":
+                synth = synth.astype({'age': 'int', 'ownchild': 'int', 'hoursut': 'int'})
+            else:
+                synth = synth.astype(int)
+
+        tailored_ma, tailored_auc, arbitrary_ma, tailored_time, tailored_roc = \
+            run_all_privatepgm_experiments(cfg, columns, aux, synth, eps,
+                                           targets, target_ids, membership, fps)
+
+        return (None, None, None,        # KDE (not computed)
+                None, None,              # mm_ma, mm_auc (unweighted)
+                tailored_ma, tailored_auc,  # weighted MA / AUC
+                tailored_time,
+                arbitrary_ma,
+                None,                   # distance
+                None,                   # kde_roc
+                tailored_roc)
+    except ValueError as e:
+        print(f"Error in running PrivatePGM: {e}")
+        return (None,) * 12
+
+
+def run_all_privatepgm_experiments(cfg, columns, aux, synth, eps,
+                                   targets, target_ids, membership, fps):
+    """Score the MAMA-MIA attack on a Private-PGM synthetic dataset.
+
+    Uses the same ``custom_mst_attack`` scoring as MST, since both represent
+    focal points as dicts of ``{clique_tuple: weight}``.
+
+    Because Private-PGM's cliques are fixed, ``fps`` should already contain
+    uniform weights (all cliques appear in every shadow run).  The threshold
+    logic in ``determine_weight_threshold`` will pass all cliques through.
+    """
+    marginals_weights = fps
+
+    start_time = time.process_time()
+    scores, tailored_ma, tailored_auc, ROC_scores = custom_mst_attack(
+        cfg, eps, aux, synth, targets, target_ids, membership, marginals_weights
+    )
+    end_time = time.process_time()
+    plot_output(scores)
+
+    arbitrary_FP_ma = None
+    if cfg.check_arbitrary_fps:
+        arbitrary_marginals = generate_arbitrary_FPs(columns, len(columns) - 1, 2, 2)
+        _, arbitrary_FP_ma, _ = custom_mst_attack(
+            cfg, eps, aux, synth, targets, target_ids, membership, arbitrary_marginals
+        )
+
+    return tailored_ma, tailored_auc, arbitrary_FP_ma, end_time - start_time, ROC_scores
 
 
 def custom_mst_attack_for_berka(cfg, eps, aux, synth, targets, target_ids, membership, marginals_weights):

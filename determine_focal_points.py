@@ -12,6 +12,7 @@ sys.path.append('reprosyn-main/src/reprosyn/methods/mbi/')
 
 import mst
 import privbayes
+import privatepgm as pgm_module
 
 sys.path.append('private_gsd/')
 from utils.utils_data import Dataset, Domain
@@ -98,6 +99,48 @@ def determine_gsd_marginals(cfg, aux, columns, catg_cols, meta, eps, n_size, fil
     FPs = [tuple([round(float(x), 3) for x in all_possible_queries[query_id]]) for query_id in query_ids]
     save_off_intermediate_FPs(cfg, eps, FPs, "GSD", filename=filename)
     return FPs
+
+
+def determine_privatepgm_marginals(cfg, aux, columns, catg_cols, meta, eps, n_size, filename=None):
+    """Return the fixed clique set used by Private-PGM.
+
+    Unlike MST/PrivBayes, Private-PGM measures a *deterministic* set of
+    marginals: all 1-way singletons plus all 2-way (col, target_variable) pairs.
+    Shadow modelling is therefore trivial – the same cliques appear on every
+    run, regardless of epsilon or the sampled auxiliary data.
+
+    The function still accepts the same signature as the other
+    ``determine_*`` functions so it can be plugged in transparently.
+    The ``filename`` / save-off machinery is preserved so the cached focal-
+    point file looks identical to the MST one.
+
+    Parameters
+    ----------
+    cfg       : Config object (uses cfg.pgm_target_variable if set, else last column)
+    aux       : auxiliary DataFrame (used only for domain discovery)
+    columns   : list of column names to include
+    catg_cols : categorical column names (unused here, kept for API compatibility)
+    meta      : reprosyn metadata list
+    eps       : epsilon (unused – cliques are epsilon-independent)
+    n_size    : training size (unused – cliques are size-independent)
+    filename  : artifact filename for caching
+    """
+    target = getattr(cfg, 'pgm_target_variable', None) or columns[-1]
+
+    cliques_out = []
+
+    # 1-way marginals
+    for col in columns:
+        cliques_out.append((col,))
+
+    # 2-way (col, target) marginals  –  sorted for canonical form
+    for col in columns:
+        if col != target:
+            pair = tuple(sorted([col, target]))
+            cliques_out.append(pair)
+
+    save_off_intermediate_FPs(cfg, eps, cliques_out, "PrivatePGM", filename=filename)
+    return cliques_out
 
 
 def determine_rap_queries(cfg, aux, columns, _, meta, eps, n_size, filename=None):

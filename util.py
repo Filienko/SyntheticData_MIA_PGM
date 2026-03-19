@@ -98,6 +98,11 @@ class Config:
             gsd_k=2,
             gsd_bins=[2, 4, 8, 16, 32],
             gsd_generations=100_000,
+
+            # Private-PGM parameters
+            # The target variable drives which 2-way marginals are measured.
+            # Set to None to default to the last column in the dataset.
+            pgm_target_variable=None,
     ):
         self.data_name = data_name
         self.n_runs_MA = n_runs_MA
@@ -124,6 +129,7 @@ class Config:
         self.gsd_k = gsd_k
         self.gsd_bins = gsd_bins
         self.gsd_generations = gsd_generations
+        self.pgm_target_variable = pgm_target_variable
 
     def get_filename(self, task, use_RAP_config=False, overlap=True):
         MI_type = 'set' if self.set_MI else 'single'

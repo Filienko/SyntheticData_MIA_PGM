@@ -18,6 +18,7 @@ sys.path.append('reprosyn-main/src/reprosyn/methods/mbi/')
 import mst
 
 import privbayes
+import privatepgm as pgm_module
 
 import csv
 import zipfile
@@ -120,8 +121,9 @@ def shadow_model():
         "priv": determine_privbayes_conditionals,
         "gsd": determine_gsd_marginals,
         "rap": determine_rap_queries,
-        # "rap2": determine_rap_queries,
-        # (Config("cali", rap_k=5, rap_top_q=30), determine_rap_queries),
+        # Private-PGM: fixed (col, target_variable) 2-way marginals
+        # Shadow modelling is deterministic; the fp file is built in one pass.
+        "pgm": determine_privatepgm_marginals,
     }
 
     experiment_methods = {
@@ -264,7 +266,8 @@ def mama_mia():
         "mst": attack_mst,
         "priv": attack_privbayes,
         "gsd": attack_gsd,
-        "rap": attack_rap
+        "rap": attack_rap,
+        "pgm": attack_privatepgm,
     }
 
     experiment_methods = {
