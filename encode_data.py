@@ -163,10 +163,10 @@ def tcga_data(cfg):
     # Reprosyn metadata: every column gets domain 0..C.n_bins-1 for features,
     # 0..K-1 for Subtype.
     meta = [
-        {"name": col, "representation": list(range(C.n_bins))}
+        {"name": col, "type": "finite/ordered", "representation": list(range(C.n_bins))}
         for col in feature_cols
     ] + [
-        {"name": target_col, "representation": list(range(len(subtypes)))}
+        {"name": target_col, "type": "finite/ordered", "representation": list(range(len(subtypes)))}
     ]
 
     # fit_discrete_features_evenly and fit_data_all_numeric for KDE / RAP paths.
