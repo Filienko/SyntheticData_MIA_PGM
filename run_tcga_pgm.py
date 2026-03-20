@@ -45,8 +45,10 @@ n_runs     = int(sys.argv[3])   if len(sys.argv) > 3 else 10
 # ---------------------------------------------------------------------------
 # Bootstrap paths (mirrors mamamia_experiments.py)
 # ---------------------------------------------------------------------------
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.append('reprosyn-main/src/reprosyn/methods/mbi/')
+
+import mbi_patch  # must be before any mbi import; patches FactoredInference + JIT
 
 # Mirror the directory structure expected by mamamia_experiments.py.
 # DATA_DIR = "data/"  → artifacts go into data/experiment_artifacts/

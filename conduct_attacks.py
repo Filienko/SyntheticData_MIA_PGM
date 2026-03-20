@@ -15,10 +15,13 @@ import privbayes
 import privatepgm as pgm_module
 
 sys.path.append('private_gsd/')
-from utils.utils_data import Dataset, Domain
-from stats import Marginals, ChainedStatistics
-from models import GSD
-from jax.random import PRNGKey
+try:
+    from utils.utils_data import Dataset, Domain
+    from stats import Marginals, ChainedStatistics
+    from models import GSD
+    from jax.random import PRNGKey
+except ImportError:
+    pass  # private_gsd submodule not initialised; GSD attacks unavailable
 
 
 # from collections import Counter

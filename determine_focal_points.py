@@ -15,10 +15,13 @@ import privbayes
 import privatepgm as pgm_module
 
 sys.path.append('private_gsd/')
-from utils.utils_data import Dataset, Domain
-from stats import Marginals, ChainedStatistics
-from models import GSD
-from jax.random import PRNGKey
+try:
+    from utils.utils_data import Dataset, Domain
+    from stats import Marginals, ChainedStatistics
+    from models import GSD
+    from jax.random import PRNGKey
+except ImportError:
+    pass  # private_gsd submodule not initialised; GSD attacks unavailable
 
 
 from collections import Counter
@@ -140,7 +143,9 @@ def determine_privatepgm_marginals(cfg, aux, columns, catg_cols, meta, eps, n_si
             cliques_out.append(pair)
 
     save_off_intermediate_FPs(cfg, eps, cliques_out, "PrivatePGM", filename=filename)
-    return cliques_out
+    # Return the frequency dict (same format as MST/PrivBayes focal points).
+    # Since cliques are deterministic, every clique has count=1.
+    return {clique: 1 for clique in cliques_out}
 
 
 def determine_rap_queries(cfg, aux, columns, _, meta, eps, n_size, filename=None):
