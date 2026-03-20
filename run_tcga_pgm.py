@@ -92,7 +92,7 @@ print(f"  Subtype   : {aux['Subtype'].nunique()} classes, "
 # ---------------------------------------------------------------------------
 # Focal points  –  for Private-PGM these are deterministic.
 # ---------------------------------------------------------------------------
-fp_file = f"intermediate/experiment_artifacts/focalpoints/FP_tcga_pgm_e{epsilon:.2f}"
+fp_file = f"FP_tcga_pgm_e{epsilon:.2f}_n{train_size}"
 fps = determine_privatepgm_marginals(
     cfg, aux, columns, cfg.categorical_columns, meta,
     epsilon, train_size, filename=fp_file

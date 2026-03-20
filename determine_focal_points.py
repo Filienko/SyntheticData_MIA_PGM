@@ -10,8 +10,6 @@ warnings.filterwarnings("ignore")
 sys.path.append('reprosyn-main/src/reprosyn/methods/mbi/')
 # import disjoint_set
 
-import mst
-import privbayes
 import privatepgm as pgm_module
 
 sys.path.append('private_gsd/')
@@ -32,6 +30,7 @@ from util import *
 
 
 def determine_mst_marginals(cfg, aux, columns, _, meta, eps, n_size, filename=None):
+    import mst
     cliques = []
     gen = mst.MST(
         dataset=aux[columns].sample(n=n_size),
@@ -51,6 +50,7 @@ def determine_mst_marginals(cfg, aux, columns, _, meta, eps, n_size, filename=No
 
 
 def determine_privbayes_conditionals(cfg, aux, columns, _, meta, eps, n_size, filename=None):
+    import privbayes
     conditionals = []
     gen = privbayes.PRIVBAYES(
         dataset=aux[columns].sample(n=n_size),

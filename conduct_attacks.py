@@ -10,8 +10,6 @@ warnings.filterwarnings("ignore")
 sys.path.append('reprosyn-main/src/reprosyn/methods/mbi/')
 # import disjoint_set
 
-import mst
-import privbayes
 import privatepgm as pgm_module
 
 sys.path.append('private_gsd/')
@@ -126,6 +124,7 @@ def kde_get_ma(cfg, aux, synth, targets, target_ids, membership, sample_seed):
 
 
 def attack_mst(cfg, meta, aux, columns, train, eps, targets, target_ids, membership, kde_sample_seed, fps, synth=None):
+    import mst
     mst_gen = mst.MST(dataset=train[columns], metadata=meta, size=cfg.synth_size, epsilon=eps)
     try:
         if synth is None:
@@ -148,7 +147,7 @@ def attack_mst(cfg, meta, aux, columns, train, eps, targets, target_ids, members
 
 
 def attack_privbayes(cfg, meta, aux, columns, train, eps, targets, target_ids, membership, kde_sample_seed, fps):
-
+    import privbayes
     # generate synthetic test data
     privbayes_gen = privbayes.PRIVBAYES(dataset=train[columns], metadata=meta, size=cfg.synth_size, epsilon=eps)
 

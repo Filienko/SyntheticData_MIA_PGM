@@ -77,7 +77,7 @@ print(f"  columns   : {columns}")   # ['0','1',…,'8']
 # ---------------------------------------------------------------------------
 # Focal points (deterministic for Private-PGM)
 # ---------------------------------------------------------------------------
-fp_file = f"intermediate/experiment_artifacts/focalpoints/FP_cali_pgm_e{epsilon:.2f}_n{train_size}"
+fp_file = f"FP_cali_pgm_e{epsilon:.2f}_n{train_size}"
 fps = determine_privatepgm_marginals(
     cfg, full_aux, columns, cfg.categorical_columns, meta,
     epsilon, train_size, filename=fp_file,
