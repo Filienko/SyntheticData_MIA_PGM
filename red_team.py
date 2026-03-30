@@ -1,96 +1,114 @@
-"""red_team.py – MAMA-MIA attack class for Health-Privacy-Challenge submission.
+"""red_team.py – MAMA-MIA submission for Health-Privacy-Challenge.
 
-This file is the submission entry point.  Place it (together with
-competition_mia.py and any supporting files) inside the submission zip:
+Drop this file (plus competition_mia.py, encode_data.py, util.py, mbi_patch.py,
+mbi/, reprosyn-main/, and config.yaml) into the submission zip.
 
-    redteam_{teamname}_TCGA-BRCA.zip
-    ├── red_team.py                ← this file
-    ├── competition_mia.py         ← our attack engine
-    ├── encode_data.py             ← discretization helpers
-    ├── util.py                    ← C namespace and dump/load helpers
-    ├── mbi_patch.py               ← MBI pandas-3.x compatibility patch
-    ├── config.yaml                ← competition config (updated below)
-    ├── environment.yaml           ← conda environment
-    ├── synthetic_data_1_predictions.csv   ← pre-generated predictions
-    ├── synthetic_data_2_predictions.csv
-    ├── synthetic_data_3_predictions.csv
-    └── synthetic_data_4_predictions.csv
+Competition evaluators run it as:
+    python red_team.py run-mia <synthetic_file> <mmb_test_file> <experiment_name> \\
+        [--mmb_labels_file <gt_csv>] [--reference_file <ref_tsv>]
 
-How the competition framework uses this file
---------------------------------------------
-The competition calls run_mia() from its red_team.py entry point, which:
-  1. Reads config.yaml from the current directory.
-  2. Instantiates the class mapped to `attack_model` in `mia_classes`.
-  3. Calls `mia_model.run_attack()` → Dict[str, np.ndarray].
-  4. Calls `mia_model.save_predictions(predictions)`.
+The competition framework (src/mia/red_team.py) also calls it dynamically via
+mia_classes; our standalone click commands replicate that flow so this file
+works both ways.
 
-Relevant BaseMIAModel constructor signature (from competition source):
-    BaseMIAModel(
-        config,                  # dict from config.yaml
-        synthetic_file,          # path to Blue Team synthetic CSV
-        membership_test_file,    # path to membership test TSV/CSV
-        membership_lbl_file,     # path to ground-truth labels (may be None)
-        mia_experiment_name,     # e.g. "synthetic_data_1"
-        reference_file=None,     # path to reference data (may be None)
-    )
+Data loading follows MIADataLoader conventions exactly
+(src/mia/utils/prepare_data.py):
+  - synthetic_file : CSV, no index column, numeric gene columns.
+  - mmb_test_file  : TSV, genes as rows / samples as columns → transposed.
+  - reference_file : TSV, same layout as mmb_test_file.
+  - mmb_labels_file: CSV with index col, column membership_label_col.
+
+run_attack() returns (Dict[str, np.ndarray], np.ndarray | None) as expected
+by src/mia/red_team.py:
+    predictions, y_test = mia_model.run_attack()
 """
 
 import os
 import sys
+import click
+import yaml
 import numpy as np
+import pandas as pd
+from sklearn.preprocessing import StandardScaler
 
 # ---------------------------------------------------------------------------
-# Attempt to import BaseMIAModel from the competition framework.
-# Falls back to a minimal stub when running outside the competition repo.
+# Import BaseMIAModel – works inside the competition repo or standalone.
 # ---------------------------------------------------------------------------
 try:
-    from src.mia.models.base import BaseMIAModel  # competition package
+    from src.mia.models.base import BaseMIAModel
 except ImportError:
-    # Stub so this file is importable during standalone development.
+    # Stub for standalone use / development outside the competition repo.
     from abc import ABC, abstractmethod
 
-    class BaseMIAModel(ABC):           # noqa: F811  (redefined locally)
+    class BaseMIAModel(ABC):                    # noqa: F811
         def __init__(self, config, synthetic_file, membership_test_file,
-                     membership_lbl_file, mia_experiment_name, reference_file=None):
-            self.config              = config
-            self.synthetic_file      = synthetic_file
+                     membership_lbl_file, mia_experiment_name,
+                     reference_file=None):
+            self.config               = config
+            self.home_dir             = config["dir_list"]["home"]
+            self.generator_model      = config["generator_config"]["name"]
+            self.experiment_name      = config["generator_config"]["experiment_name"]
+            self.attack_model         = config["attack_model"]
+            self.dataset_config       = config["dataset_config"]
+            self.dataset_name         = self.dataset_config["name"]
+            self.membership_label_col = self.dataset_config["membership_label_col"]
+            self.synthetic_file       = synthetic_file
+            self.reference_file       = reference_file
             self.membership_test_file = membership_test_file
             self.membership_lbl_file  = membership_lbl_file
-            self.mia_experiment_name  = mia_experiment_name
-            self.reference_file       = reference_file
+            self.results_save_dir     = os.path.join(
+                os.path.expanduser(self.home_dir),
+                config["dir_list"]["mia_files"],
+                self.dataset_name,
+                self.attack_model,
+                self.generator_model,
+                self.experiment_name,
+                mia_experiment_name,
+            )
+            os.makedirs(self.results_save_dir, exist_ok=True)
+            config_key = f"{self.attack_model}_config"
+            if config_key in config:
+                self.mia_config = config[config_key]
+            else:
+                raise ValueError(
+                    f"config.yaml must contain '{config_key}' section "
+                    f"(attack_model is '{self.attack_model}')."
+                )
 
         @abstractmethod
         def run_attack(self):
             ...
 
         def save_predictions(self, scores_dict):
-            out_dir = self.config.get('mia_files', 'results/mia')
-            os.makedirs(out_dir, exist_ok=True)
-            for method, scores in scores_dict.items():
-                fname = os.path.join(out_dir, f'{self.mia_experiment_name}_{method}_predictions.csv')
-                import pandas as pd
-                pd.DataFrame({'membership_label': scores}).to_csv(fname, index=False)
-                print(f"  Saved → {fname}")
+            for key, arr in scores_dict.items():
+                df = pd.DataFrame(data=arr, columns=[self.membership_label_col])
+                path = os.path.join(self.results_save_dir, f"{key}_predictions.csv")
+                df.to_csv(path, index=False)
+                print(f"  Saved → {path}")
 
         def evaluate_attack(self, scores_dict, labels, file_name):
             from sklearn.metrics import roc_auc_score
-            for method, scores in scores_dict.items():
+            rows = []
+            for method, arr in scores_dict.items():
                 try:
-                    auc = roc_auc_score(labels, scores)
-                    print(f"  [{method}] AUC = {auc:.4f}  MA = {2*auc-1:.4f}")
-                except Exception as e:
-                    print(f"  [{method}] evaluation error: {e}")
+                    auc = roc_auc_score(labels, arr)
+                    rows.append({"method": method, "aucroc": round(auc, 4),
+                                 "ma": round(2 * auc - 1, 4)})
+                    print(f"  [{method}] AUC={auc:.4f}  MA={2*auc-1:.4f}")
+                except Exception as exc:
+                    print(f"  [{method}] evaluation error: {exc}")
+            if rows:
+                path = os.path.join(self.results_save_dir, file_name)
+                pd.DataFrame(rows).to_csv(path, index=False)
+                print(f"  Evaluation → {path}")
 
 
 # ---------------------------------------------------------------------------
-# Import our attack engine
+# Our attack engine (import from competition_mia.py in the same zip).
 # ---------------------------------------------------------------------------
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from competition_mia import (
-    load_synthetic,
-    load_membership_test,
-    load_gt,
     build_pgm_focal_points,
     encode_dataframes,
     mama_mia_score,
@@ -98,7 +116,26 @@ from competition_mia import (
 
 
 # ===========================================================================
-# Our MAMA-MIA attack class
+# Data loading helpers  (match MIADataLoader in prepare_data.py exactly)
+# ===========================================================================
+
+def _load_csv(path):
+    """Synthetic data: CSV, no index column."""
+    return pd.read_csv(path)
+
+
+def _load_tsv_transposed(path):
+    """Membership test / reference: TSV, genes as rows → transpose to samples×genes."""
+    return pd.read_csv(path, sep="\t", index_col=0).T
+
+
+def _load_labels(path, label_col):
+    """Ground-truth membership labels: CSV with index column."""
+    return pd.read_csv(path, index_col=0)[label_col].values.astype(int)
+
+
+# ===========================================================================
+# Our MIA model class
 # ===========================================================================
 
 class MamaMIAPGMModel(BaseMIAModel):
@@ -106,82 +143,142 @@ class MamaMIAPGMModel(BaseMIAModel):
 
     Attack overview
     ---------------
-    Private-PGM uses a fixed marginal structure (all 1-way + all 2-way with
-    a target variable). Because these cliques are deterministic, we can
-    reconstruct the exact focal-point set from the domain without shadow
-    modelling. We then score each target record by the MAMA-MIA likelihood-
-    ratio sum over the pre-computed focal-point cliques, using:
-      - P_synth  ← empirical marginal distribution of Blue Team synthetic data
-      - P_ref    ← empirical marginal distribution of the reference dataset
+    Private-PGM uses a *fixed* marginal structure (deterministic):
+      - All 1-way singletons for every gene column
+      - All 2-way (gene, target_col) pairs if target_col is set
 
-    Config keys read from competition_config section in config.yaml
-    --------------------------------------------------------------
-    mama_mia_config:
-      epsilon:    float  – DP epsilon used by Blue Team (informational only)
-      n_bins:     int    – discretization bins (default 10)
-      target_col: str    – PGM pivot column for 2-way marginals
-                           (empty string or omit for 1-way only)
+    We reconstruct these focal points from the domain, then score each test
+    sample by the MAMA-MIA likelihood-ratio sum:
+        score(x) = Σ_clique  P_synth(x[clique]) / P_ref(x[clique])
+
+    where P_synth is estimated from the Blue Team's synthetic data and
+    P_ref from the reference dataset.
+
+    Parameters read from mama_mia_pgm_config in config.yaml
+    --------------------------------------------------------
+    n_bins     : int   discretization bins (default 10)
+    target_col : str   PGM pivot column for 2-way marginals ("" = 1-way only)
     """
+
+    def __init__(self, config, synthetic_file, membership_test_file,
+                 membership_lbl_file, mia_experiment_name,
+                 reference_file=None, test_on_real=False):
+        # test_on_real is passed by run_mia() but not used by our attack.
+        super().__init__(config, synthetic_file, membership_test_file,
+                         membership_lbl_file, mia_experiment_name, reference_file)
 
     def run_attack(self):
         """Execute the MAMA-MIA attack.
 
         Returns
         -------
-        dict  {"mama_mia": np.ndarray}
-            Membership scores, one per test sample (higher = more likely member).
+        predictions : Dict[str, np.ndarray]
+            {"mama_mia": scores}  – one score per test sample, higher = member.
+        y_test : np.ndarray | None
+            Ground-truth membership labels, or None if not provided.
         """
-        # --- Read attack parameters from config ---
-        mm_cfg     = self.config.get('mama_mia_config', {})
-        n_bins     = int(mm_cfg.get('n_bins', 10))
-        target_col = mm_cfg.get('target_col', '') or None   # '' → None (1-way only)
-        label_col  = (self.config.get('dataset_config', {})
-                      .get('membership_label_col', 'membership_label'))
+        n_bins     = int(self.mia_config.get("n_bins", 10))
+        target_col = self.mia_config.get("target_col", "") or None
 
         print(f"\n[MamaMIAPGMModel] n_bins={n_bins}, target_col={target_col!r}")
+        print(f"  synthetic : {self.synthetic_file}")
+        print(f"  test      : {self.membership_test_file}")
+        print(f"  reference : {self.reference_file}")
 
-        # --- Load data ---
-        synth   = load_synthetic(self.synthetic_file)
-        targets = load_membership_test(self.membership_test_file)
+        # --- Load data as DataFrames (we need column names for marginals) ---
+        synth_df = _load_csv(self.synthetic_file)
+        test_df  = _load_tsv_transposed(self.membership_test_file)
+        test_df.index = range(len(test_df))
 
         if self.reference_file and os.path.exists(self.reference_file):
-            import pandas as pd
-            ref = pd.read_csv(self.reference_file, index_col=0)
+            ref_df = _load_tsv_transposed(self.reference_file)
+            ref_df.index = range(len(ref_df))
         else:
-            print("  WARNING: no reference file – using synthetic as ref (weak attack)")
-            ref = synth.copy()
+            print("  WARNING: no reference file – using synthetic data as ref (weak attack)")
+            ref_df = synth_df.copy()
 
-        # Drop label columns if present.
-        synth   = synth.drop(columns=[label_col], errors='ignore')
-        ref     = ref.drop(columns=[label_col], errors='ignore')
-        targets = targets.drop(columns=[label_col], errors='ignore')
+        # --- Ground-truth labels (None if not provided) ---
+        y_test = None
+        if self.membership_lbl_file and os.path.exists(self.membership_lbl_file):
+            y_test = _load_labels(self.membership_lbl_file, self.membership_label_col)
+
+        # --- Drop label column if accidentally present ---
+        lbl = self.membership_label_col
+        synth_df = synth_df.drop(columns=[lbl], errors="ignore")
+        ref_df   = ref_df.drop(columns=[lbl], errors="ignore")
+        test_df  = test_df.drop(columns=[lbl], errors="ignore")
 
         # --- Align columns ---
-        common_cols = [c for c in synth.columns
-                       if c in ref.columns and c in targets.columns]
-        synth   = synth[common_cols]
-        ref     = ref[common_cols]
-        targets = targets[common_cols]
+        common_cols = [c for c in synth_df.columns
+                       if c in ref_df.columns and c in test_df.columns]
+        synth_df = synth_df[common_cols]
+        ref_df   = ref_df[common_cols]
+        test_df  = test_df[common_cols]
         feature_cols = [c for c in common_cols if c != target_col]
 
-        print(f"  Aligned on {len(common_cols)} columns, {len(targets)} target records")
+        print(f"  Aligned on {len(common_cols)} columns, {len(test_df)} test samples")
 
-        # --- Encode ---
-        synth_enc, ref_enc, targets_enc = encode_dataframes(
-            synth, ref, targets, feature_cols, n_bins, standardize=True
+        # --- Encode (StandardScaler → equal-depth binning) ---
+        synth_enc, ref_enc, test_enc = encode_dataframes(
+            synth_df, ref_df, test_df, feature_cols, n_bins, standardize=True
         )
 
-        # --- Build focal points & score ---
+        # --- MAMA-MIA scoring ---
         fps    = build_pgm_focal_points(common_cols, target_col)
-        scores = mama_mia_score(synth_enc, ref_enc, targets_enc, fps)
+        scores = mama_mia_score(synth_enc, ref_enc, test_enc, fps)
 
         print(f"  Score range: [{scores.min():.4f}, {scores.max():.4f}]")
-        return {'mama_mia': scores}
+        return {"mama_mia": scores}, y_test
 
 
 # ===========================================================================
-# mia_classes registry (required by the competition framework)
+# mia_classes registry  (used by the competition's dynamic import)
 # ===========================================================================
 mia_classes = {
-    'mama_mia_pgm': MamaMIAPGMModel,
+    "mama_mia_pgm": MamaMIAPGMModel,
 }
+
+
+# ===========================================================================
+# Standalone CLI  (mirrors src/mia/red_team.py so this file is self-contained)
+# ===========================================================================
+
+def _get_mia_class(name):
+    if name in mia_classes:
+        return mia_classes[name]
+    raise ValueError(f"Unknown attack model: {name!r}. Known: {list(mia_classes)}")
+
+
+@click.group()
+def cli():
+    pass
+
+
+@cli.command("run-mia")
+@click.argument("synthetic_file",    type=click.Path(exists=True))
+@click.argument("mmb_test_file",     type=click.Path(exists=True))
+@click.argument("mia_experiment_name", type=str, default="")
+@click.option("--mmb_labels_file",  type=click.Path(), default=None)
+@click.option("--test_on_real",      type=bool, default=False)
+@click.option("--reference_file",   type=click.Path(), default=None)
+def run_mia(synthetic_file, mmb_test_file, mia_experiment_name,
+            mmb_labels_file, test_on_real, reference_file):
+    """Run MAMA-MIA attack – called by competition evaluators or directly."""
+    config = yaml.safe_load(open("config.yaml"))
+    MIAClass = _get_mia_class(config["attack_model"])
+
+    model = MIAClass(
+        config, synthetic_file, mmb_test_file,
+        mmb_labels_file, mia_experiment_name,
+        reference_file, test_on_real,
+    )
+
+    predictions, y_test = model.run_attack()
+    model.save_predictions(predictions)
+
+    if y_test is not None:
+        model.evaluate_attack(predictions, y_test, "evaluation_results.csv")
+
+
+if __name__ == "__main__":
+    cli()
