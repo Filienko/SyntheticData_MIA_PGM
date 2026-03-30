@@ -1,0 +1,45 @@
+# competition_config.yaml
+# Configuration for MAMA-MIA attack on Health-Privacy-Challenge
+# (Track I, Red Team, DP-PGM Blue Team generator)
+#
+# Mirrors the competition's own config.yaml structure so both can coexist.
+# -------------------------------------------------------------------
+
+# ------------------------------------------------------------------
+# Competition repo paths  (adjust to your local clone location)
+# ------------------------------------------------------------------
+dir_list:
+  home: "~/Health-Privacy-Challenge"      # root of competition repo clone
+  data_splits: "data_splits"              # relative to home
+  meta: "data/meta"
+  processed_data: "data/processed"
+  mia_files: "results/mia"               # predictions go here
+
+# ------------------------------------------------------------------
+# Dataset to attack
+# ------------------------------------------------------------------
+dataset_config:
+  name: "TCGA-BRCA"          # or TCGA-COMBINED
+  membership_label_col: "membership_label"
+
+# ------------------------------------------------------------------
+# Attack identity
+# ------------------------------------------------------------------
+attack_model: "mama_mia_pgm"
+
+# ------------------------------------------------------------------
+# Which Blue Team generator to attack
+# Change model_name / experiment_name for each target generator.
+# ------------------------------------------------------------------
+generator_config:
+  model_name: "dp_pgm"          # Blue Team's DP-PGM generator
+  experiment_name: "epsilon_10.0"  # adjust to match Blue Team's epsilon
+
+# ------------------------------------------------------------------
+# MAMA-MIA specific parameters
+# ------------------------------------------------------------------
+mama_mia_config:
+  epsilon: 10.0        # DP epsilon used by Blue Team (for score logging)
+  n_bins: 10           # discretization bins – must match Blue Team's PGM setup
+  target_col: "Subtype"  # PGM target variable (2-way marginals pivot on this)
+  # Set target_col to "" to use only 1-way marginals (more conservative attack)
