@@ -39,23 +39,28 @@ from generator import PipelineBase, encode_ordinal, decode_ordinal
 # ---------------------------------------------------------------------------
 
 def _calibrate_sigma(epsilon, delta):
-    """Return Gaussian noise sigma so the two-round query is (eps, delta)-DP.
+    """Return Gaussian noise sigma so the TWO-round query is (eps, delta)-DP.
 
-    model.py calls moments_calibration(round1=1, round2=1, eps, delta), which
-    searches for sigma such that the combined RDP of two single-query Gaussian
-    mechanisms (one 1-way round, one 2-way round) satisfies (eps, delta).
+    The reference (model.py moments_calibration(round1=1, round2=1, eps, delta))
+    finds sigma such that composing TWO Gaussian mechanisms (one 1-way round,
+    one 2-way round), each with sensitivity 1 and noise sigma, satisfies
+    (eps, delta)-DP under RDP composition.
 
-    Here we use the zCDP conversion via cdp_rho (already used by MST):
-        rho = cdp_rho(epsilon, delta)
-        sigma = sqrt(1 / (2 * rho))
-    This is the standard Gaussian mechanism under zCDP and is a valid (tight)
-    approximation of model.py's RDP-based calibration.
+    Under zCDP each Gaussian mechanism with sensitivity 1 and noise sigma
+    contributes rho_i = 1 / (2 * sigma^2).  Two rounds therefore compose to:
+        rho_total = 1 / sigma^2
+
+    For (eps, delta)-DP we need rho_total <= cdp_rho(eps, delta), giving:
+        sigma >= 1 / sqrt(cdp_rho(eps, delta))
+
+    Previously this returned sqrt(1 / (2*rho)), which is calibrated for only
+    ONE round and is ~sqrt(2) too small, effectively spending ~2x epsilon.
     """
     if delta <= 0:
         # Pure DP via Laplace; return scale = 1/(eps * d) (model.py fallback).
-        return None  # handled separately in train_standard
+        return None  # handled separately in privatepgm()
     rho = cdp_rho(epsilon, delta)
-    return np.sqrt(1.0 / (2.0 * rho))
+    return np.sqrt(1.0 / rho)          # two-round composition: rho_total = 1/sigma^2
 
 
 # ---------------------------------------------------------------------------
@@ -195,8 +200,12 @@ class PRIVATEPGM(PipelineBase):
 
         cliques = self.params["cliques"]
         if cliques is None:
+            # Match reference order: (col, target) preserving domain iteration order.
+            # The reference uses [(col, target) for col in domain if col != target].
+            # sorted() was removed because it changed the clique tuple ordering
+            # vs. the reference, which doesn't sort.
             cliques = [
-                tuple(sorted([col, target]))
+                (col, target)
                 for col in self.domain
                 if col != target
             ]
