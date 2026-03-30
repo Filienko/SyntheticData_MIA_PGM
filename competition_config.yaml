@@ -41,5 +41,6 @@ generator_config:
 mama_mia_config:
   epsilon: 10.0        # DP epsilon used by Blue Team (for score logging)
   n_bins: 10           # discretization bins – must match Blue Team's PGM setup
-  target_col: "Subtype"  # PGM target variable (2-way marginals pivot on this)
-  # Set target_col to "" to use only 1-way marginals (more conservative attack)
+  target_col: ""       # "" = 1-way marginals only (safe default for 978-gene data)
+                       # Set to "Subtype" if Blue Team's PGM used Subtype as pivot,
+                       # or to our local TCGA's target variable.
