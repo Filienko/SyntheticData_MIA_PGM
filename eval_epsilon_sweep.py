@@ -59,14 +59,19 @@ from conduct_attacks import attack_privatepgm
 # Sweep
 # ---------------------------------------------------------------------------
 
-def run_sweep(epsilons, n_runs, train_size, n_bins, data_path=None, target_col=None):
+def run_sweep(epsilons, n_runs, train_size, n_targets, n_bins,
+              data_path=None, target_col=None):
     """Run MAMA-MIA attack across epsilons.
 
     Parameters
     ----------
     epsilons   : list[float]  DP epsilon values to test
     n_runs     : int          attack trials per epsilon
-    train_size : int          records sampled to train PGM per trial
+    train_size : int          records used to train PGM per trial
+    n_targets  : int          target records to classify per trial (members + non-members).
+                              Half are members, half non-members.
+                              AUC variance ∝ 1/sqrt(n_targets) – use ≥100 for stable estimates.
+                              Must satisfy: train_size + n_targets ≤ total dataset rows.
     n_bins     : int          equal-depth discretization bins for continuous features
     data_path  : str|None     override CSV path (default: data/tcga_combined_full_100f.csv)
     target_col : str|None     PGM pivot column; None → infer from dataset loader
@@ -81,7 +86,7 @@ def run_sweep(epsilons, n_runs, train_size, n_bins, data_path=None, target_col=N
     cfg = Config(
         data_name="tcga",
         train_size=train_size,
-        train_sizes={train_size: max(6, train_size // 10)},
+        train_sizes={train_size: n_targets},
         set_MI=False,
         overlapping_aux=True,
         check_arbitrary_fps=False,
@@ -163,6 +168,7 @@ def run_sweep(epsilons, n_runs, train_size, n_bins, data_path=None, target_col=N
                 'MA':         ma_w,
                 'cpu_s':      round(elapsed, 2),
                 'train_size': train_size,
+                'n_targets':  n_targets,
                 'n_bins':     n_bins,
             })
 
@@ -175,16 +181,17 @@ def run_sweep(epsilons, n_runs, train_size, n_bins, data_path=None, target_col=N
               f"  MA={mean_ma:.4f}±{std_ma:.4f}")
 
         summary_rows.append({
-            'epsilon':   eps,
-            'mean_AUC':  round(mean_auc, 4),
-            'std_AUC':   round(std_auc, 4),
-            'mean_MA':   round(mean_ma, 4),
-            'std_MA':    round(std_ma, 4),
-            'n_runs':    len(run_aucs),
+            'epsilon':    eps,
+            'mean_AUC':   round(mean_auc, 4),
+            'std_AUC':    round(std_auc, 4),
+            'mean_MA':    round(mean_ma, 4),
+            'std_MA':     round(std_ma, 4),
+            'n_runs':     len(run_aucs),
             'train_size': train_size,
-            'n_bins':    n_bins,
-            'AUC_runs':  run_aucs,
-            'MA_runs':   run_mas,
+            'n_targets':  n_targets,
+            'n_bins':     n_bins,
+            'AUC_runs':   run_aucs,
+            'MA_runs':    run_mas,
         })
 
     summary_df = pd.DataFrame(summary_rows)
@@ -197,19 +204,23 @@ def run_sweep(epsilons, n_runs, train_size, n_bins, data_path=None, target_col=N
 # ---------------------------------------------------------------------------
 
 def print_summary(df):
-    print(f"\n{'='*60}")
-    print("SUMMARY  (MAMA-MIA on Private-PGM × TCGA)")
-    print(f"{'='*60}")
-    print(f"{'ε':>6}  {'AUC mean':>9}  {'AUC std':>8}  {'MA mean':>8}  {'MA std':>7}  runs")
-    print("-" * 60)
+    n_tgt = int(df['n_targets'].iloc[0]) if 'n_targets' in df.columns else '?'
+    n_tr  = int(df['train_size'].iloc[0])
+    print(f"\n{'='*68}")
+    print(f"SUMMARY  (MAMA-MIA on Private-PGM × TCGA  |  "
+          f"train={n_tr}  targets={n_tgt})")
+    print(f"{'='*68}")
+    print(f"{'ε':>6}  {'AUC mean':>9}  {'AUC std':>8}  {'MA mean':>8}  {'MA std':>7}  runs  per-run AUC")
+    print("-" * 68)
     for _, row in df.iterrows():
+        runs_str = "  ".join(f"{v:.3f}" for v in row.get('AUC_runs', []))
         print(f"{row['epsilon']:>6}  "
               f"{row['mean_AUC']:>9.4f}  "
               f"{row['std_AUC']:>8.4f}  "
               f"{row['mean_MA']:>8.4f}  "
               f"{row['std_MA']:>7.4f}  "
-              f"{int(row['n_runs'])}")
-    print("=" * 60)
+              f"{int(row['n_runs']):>4}  [{runs_str}]")
+    print("=" * 68)
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +243,16 @@ def main():
     )
     parser.add_argument(
         "--train-size", type=int, default=300,
-        help="Number of records used to train PGM per trial",
+        help="Records used to train PGM per trial",
+    )
+    parser.add_argument(
+        "--n-targets", type=int, default=100,
+        help=(
+            "Target records classified per trial (half members, half non-members). "
+            "AUC std ∝ 1/sqrt(n_targets): 30 targets → std≈0.12 (noisy); "
+            "100 → std≈0.06; 200 → std≈0.04. "
+            "Rule of thumb for TCGA (1089 rows): train_size + n_targets ≤ 900."
+        ),
     )
     parser.add_argument(
         "--n-bins", type=int, default=10,
@@ -258,10 +278,17 @@ def main():
         f"results_epsilon_sweep_{time.strftime('%Y%m%d_%H%M%S')}.csv"
     )
 
+    total_needed = args.train_size + args.n_targets
+    if total_needed > 1000:
+        print(f"WARNING: train_size ({args.train_size}) + n_targets ({args.n_targets}) "
+              f"= {total_needed}. TCGA has 1089 rows; leaving only "
+              f"{1089 - total_needed} for aux. Consider reducing one of these.")
+
     summary_df, detail_df = run_sweep(
         epsilons=sorted(args.epsilons),
         n_runs=args.n_runs,
         train_size=args.train_size,
+        n_targets=args.n_targets,
         n_bins=args.n_bins,
         data_path=args.data,
         target_col=args.target_col,
