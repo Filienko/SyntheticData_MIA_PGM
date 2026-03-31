@@ -164,14 +164,19 @@ def tcga_data(cfg, csv_path=None):
     numeric_columns = feature_cols
     catg_columns = []
 
+    # Derive a unique artifact name from the CSV filename so parallel runs
+    # on different datasets (e.g. tcga_brca_full vs tcga_combined_full) do not
+    # overwrite each other's binning thresholds in data/experiment_artifacts/.
+    data_name = os.path.splitext(os.path.basename(csv_path))[0]  # e.g. "tcga_brca_full"
+
     # Equal-depth discretisation of continuous features (same as cali/berka).
-    fit_continuous_features_equaldepth(raw[feature_cols], "tcga")
+    fit_continuous_features_equaldepth(raw[feature_cols], data_name)
     aux = raw[feature_cols].copy()
-    aux = discretize_continuous_features_equaldepth(aux, "tcga")
+    aux = discretize_continuous_features_equaldepth(aux, data_name)
     aux[target_col] = raw[target_col].values
 
     # Reprosyn metadata: every column gets domain 0..C.n_bins-1 for features,
-    # 0..K-1 for Subtype.
+    # 0..K-1 for target_col.
     meta = [
         {"name": col, "type": "finite/ordered", "representation": list(range(C.n_bins))}
         for col in feature_cols
@@ -180,8 +185,8 @@ def tcga_data(cfg, csv_path=None):
     ]
 
     # fit_discrete_features_evenly and fit_data_all_numeric for KDE / RAP paths.
-    fit_discrete_features_evenly("tcga", aux, pd.DataFrame(meta), columns)
-    fit_data_all_numeric("tcga", aux, meta, numeric_columns, catg_columns)
+    fit_discrete_features_evenly(data_name, aux, pd.DataFrame(meta), columns)
+    fit_data_all_numeric(data_name, aux, meta, numeric_columns, catg_columns)
 
     # Individual MI: HHID == row index.
     aux["HHID"] = aux.index.values
@@ -191,7 +196,7 @@ def tcga_data(cfg, csv_path=None):
     cfg.categorical_columns = catg_columns
     cfg.pgm_target_variable = target_col
 
-    return None, aux, columns, meta, "tcga"
+    return None, aux, columns, meta, data_name
 
 
 def convert_finite_ordered_to_numeric(df):
