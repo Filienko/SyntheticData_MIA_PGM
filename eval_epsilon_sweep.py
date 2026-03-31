@@ -269,11 +269,16 @@ def main():
         f"results_epsilon_sweep_{time.strftime('%Y%m%d_%H%M%S')}.csv"
     )
 
-    total_needed = args.train_size + args.n_targets
-    if total_needed > 1000:
-        print(f"WARNING: train_size ({args.train_size}) + n_targets ({args.n_targets}) "
-              f"= {total_needed}. TCGA has 1089 rows; leaving only "
-              f"{1089 - total_needed} for aux. Consider reducing one of these.")
+    # Actual rows needed = train_size + n_targets/2
+    # (half the targets are members drawn from the training set,
+    #  so they are not extra rows — only the non-member half needs additional rows).
+    total_dataset_rows = sum(1 for _ in open(os.path.expanduser(args.data))) - 1 \
+        if args.data else 1089
+    rows_needed = args.train_size + args.n_targets // 2
+    if rows_needed > total_dataset_rows:
+        print(f"WARNING: train_size ({args.train_size}) + n_targets/2 ({args.n_targets//2}) "
+              f"= {rows_needed} exceeds dataset size ({total_dataset_rows} rows). "
+              f"Reduce train_size or n_targets.")
 
     summary_df, detail_df = run_sweep(
         epsilons=sorted(args.epsilons),
