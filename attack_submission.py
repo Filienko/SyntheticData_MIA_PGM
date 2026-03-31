@@ -447,9 +447,8 @@ def main():
                         help='Directory with the TCGA TSV files and subtypes CSV')
     parser.add_argument('--output-dir', default='results/attack',
                         help='Where to write prediction CSVs')
-    parser.add_argument('--splits', type=int, nargs='+', default=[1, 2, 3, 4],
-                        help='Which splits to attack (default: 1-4, matching competition '
-                             'submission format synthetic_data_1_predictions.csv … _4_)')
+    parser.add_argument('--splits', type=int, nargs='+', default=[1, 2, 3, 4, 5],
+                        help='Which splits to attack (default: all 5)')
     parser.add_argument('--target-col', default='cancer_type',
                         help='Column for 2-way marginals. '
                              'Set to "" to use 1-way only.')
