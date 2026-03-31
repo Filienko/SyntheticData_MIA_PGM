@@ -146,8 +146,14 @@ def tcga_data(cfg, csv_path=None):
         )
 
     raw = pd.read_csv(csv_path)
-    target_col = "Subtype"
-    feature_cols = [c for c in raw.columns if c != target_col and c not in [None, ""]  and pd.api.types.is_numeric_dtype(raw[c])]
+    # Use cfg.pgm_target_variable if set, fall back to "Subtype".
+    target_col = getattr(cfg, "pgm_target_variable", None) or "Subtype"
+    if target_col not in raw.columns:
+        raise ValueError(
+            f"Target column '{target_col}' not found in {csv_path}. "
+            f"Available columns (first 10): {list(raw.columns[:10])}"
+        )
+    feature_cols = [c for c in raw.columns if c != target_col and c not in [None, ""] and pd.api.types.is_numeric_dtype(raw[c])]
 
     # Ordinal-encode the categorical Subtype label.
     subtypes = sorted(raw[target_col].unique().tolist())
