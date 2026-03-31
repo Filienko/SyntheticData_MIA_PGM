@@ -118,17 +118,14 @@ def load_synthetic_with_labels(synth_path, labels_path):
 def load_membership_from_yaml(splits_yaml_path, split_idx, test_sample_ids):
     """Derive binary membership labels from a splits YAML file.
 
-    The YAML is expected to have one of these structures:
+    Handles the PPML-Huskies layout:
 
-        split_1:
-          train: [TCGA-..., ...]
-          test:  [TCGA-..., ...]
+        splits:
+          split_1:
+            test_index:  [TCGA-..., ...]   # held-out (non-members)
+            train_index: [TCGA-..., ...]   # training set (members)  ← optional
 
-    or with integer indices:
-
-        split_1:
-          train_idx: [0, 4, 7, ...]
-          test_idx:  [1, 2, ...]
+    If only test_index is present, members = all candidates NOT in test_index.
 
     Parameters
     ----------
@@ -141,38 +138,38 @@ def load_membership_from_yaml(splits_yaml_path, split_idx, test_sample_ids):
     np.ndarray  shape (len(test_sample_ids),)  dtype int  0=non-member 1=member
     """
     with open(splits_yaml_path) as f:
-        splits = yaml.safe_load(f)
+        root = yaml.safe_load(f)
+
+    # Navigate top-level 'splits:' wrapper if present.
+    splits = root.get('splits', root)
 
     key = f'split_{split_idx}'
     if key not in splits:
-        # try numeric key
-        key = split_idx
-    if key not in splits:
         raise KeyError(
-            f"Cannot find split key '{key}' in {splits_yaml_path}. "
+            f"Cannot find '{key}' in {splits_yaml_path}. "
             f"Available keys: {list(splits.keys())}"
         )
 
     split_data = splits[key]
 
-    # Handle both sample-ID and integer-index formats.
-    if 'train' in split_data:
-        train_set = set(split_data['train'])
+    if 'train_index' in split_data:
+        # Explicit train list → members
+        member_set = set(split_data['train_index'])
         labels = np.array(
-            [1 if sid in train_set else 0 for sid in test_sample_ids],
+            [1 if sid in member_set else 0 for sid in test_sample_ids],
             dtype=int,
         )
-    elif 'train_idx' in split_data:
-        train_idx_set = set(split_data['train_idx'])
+    elif 'test_index' in split_data:
+        # Only test list given → non-members are in test_index, everyone else is a member
+        non_member_set = set(split_data['test_index'])
         labels = np.array(
-            [1 if i in train_idx_set else 0
-             for i, _ in enumerate(test_sample_ids)],
+            [0 if sid in non_member_set else 1 for sid in test_sample_ids],
             dtype=int,
         )
     else:
         raise ValueError(
-            f"Cannot parse split '{key}': expected 'train'/'test' or "
-            f"'train_idx'/'test_idx' keys. Got: {list(split_data.keys())}"
+            f"Cannot parse split '{key}': expected 'train_index' or 'test_index'. "
+            f"Got: {list(split_data.keys())}"
         )
 
     n_members = labels.sum()
