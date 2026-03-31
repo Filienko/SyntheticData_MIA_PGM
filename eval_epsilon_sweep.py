@@ -94,23 +94,13 @@ def run_sweep(epsilons, n_runs, train_size, n_targets, n_bins,
         epsilons=epsilons,
     )
 
-    # Allow overriding the data path for full-gene datasets.
     if data_path:
-        import encode_data as _ed
-        _orig = _ed.DATA_DIR
-        _ed.DATA_DIR = os.path.dirname(data_path) + "/"
-        # Temporarily monkey-patch the CSV filename expected by tcga_data().
-        import encode_data
-        _orig_fn = None
-        # Rebuild the expected filename: tcga_data() reads DATA_DIR + "tcga_combined_full_100f.csv"
-        # If a different file is supplied, symlink or point directly via environment.
-        # Simplest: just set the path and reload.
-        # (For now, if data_path differs from default, the user must name it correctly
-        #  or use the default path; see note in --help.)
+        cfg.csv_path = os.path.abspath(data_path)
 
     _, aux, columns, meta, _ = get_data(cfg)
+    target_col_name = target_col or "Subtype"
     print(f"\nLoaded dataset: {aux.shape[0]} rows × {len(columns)} columns")
-    print(f"Subtype classes: {aux['Subtype'].nunique()}")
+    print(f"Subtype classes: {aux[target_col_name].nunique()}")
     print(f"Epsilons: {epsilons}  |  runs/ε: {n_runs}  |  train_size: {train_size}\n")
 
     summary_rows = []

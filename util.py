@@ -223,7 +223,7 @@ def get_data(cfg):
     if cfg.data_name == "berka":
         return berka_transaction_data(cfg)
     if cfg.data_name == "tcga":
-        return tcga_data(cfg)
+        return tcga_data(cfg, csv_path=getattr(cfg, "csv_path", None))
     return None
 
 

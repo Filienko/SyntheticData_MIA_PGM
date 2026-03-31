@@ -122,23 +122,27 @@ def snake_data(cfg):
 
 
 
-def tcga_data(cfg):
+def tcga_data(cfg, csv_path=None):
     """Load and preprocess the TCGA genomics dataset.
 
-    Expects: data/tcga_combined_full_100f.csv
-      - 99 continuous gene-expression features + 1 categorical 'Subtype' column
-      - 1089 rows
+    Expects a CSV with continuous gene-expression features + one categorical
+    'Subtype' column (or whichever column cfg.pgm_target_variable names).
+
+    Default path: data/tcga_combined_full_100f.csv
+    Override:     pass csv_path explicitly, or set cfg.csv_path.
 
     All continuous features are discretized into C.n_bins equal-depth bins.
     'Subtype' is kept as integers 0..K-1 via ordinal encoding.
 
-    cfg.pgm_target_variable is set to 'Subtype'.
+    cfg.pgm_target_variable is set to 'Subtype' (or cfg.pgm_target_variable if
+    already set).
     """
-    csv_path = DATA_DIR + "tcga_combined_full_100f.csv"
+    if csv_path is None:
+        csv_path = getattr(cfg, "csv_path", None) or DATA_DIR + "tcga_combined_full_100f.csv"
     if not os.path.exists(csv_path):
         raise FileNotFoundError(
             f"TCGA dataset not found at {csv_path}\n"
-            f"Please copy tcga_combined_full_100f.csv into the data/ directory."
+            f"Provide the path via --data or place the file at data/tcga_combined_full_100f.csv"
         )
 
     raw = pd.read_csv(csv_path)
