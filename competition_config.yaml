@@ -1,48 +1,47 @@
-# config.yaml  (place this file in the same directory you run the attack from)
-# MAMA-MIA attack on Health-Privacy-Challenge – Track I, Red Team
+# config.yaml — MAMA-MIA attack on Health-Privacy-Challenge, Track I Red Team
 #
-# Based on the competition's own config.yaml structure.
-# Key names must match exactly what base.py reads:
-#   base.py reads: config["generator_config"]["name"]       ← "name", not "model_name"
-#   base.py reads: config[f"{attack_model}_config"]         ← "mama_mia_pgm_config"
-# -------------------------------------------------------------------
+# Attack script: attack_submission.py
+# This config documents the actual parameters used; attack_submission.py
+# reads its parameters from CLI arguments, not this file directly.
 
 # ------------------------------------------------------------------
-# Competition repo paths  (adjust to your local clone location)
+# Competition repo paths
 # ------------------------------------------------------------------
 dir_list:
-  home: "~/Health-Privacy-Challenge"      # root of competition repo clone
+  home: "~/Health-Privacy-Challenge"
   data_splits: "data_splits"
   meta: "data/meta"
   processed_data: "data/processed"
-  mia_files: "results/mia"               # predictions written here
+  mia_files: "results/mia"
 
 # ------------------------------------------------------------------
-# Dataset to attack
+# Attack method
 # ------------------------------------------------------------------
-dataset_config:
-  name: "TCGA-BRCA"               # or TCGA-COMBINED
-  membership_label_col: "membership_label"
+attack_model: "mama_mia_pgm"   # MAMA-MIA with Private-PGM focal points
 
 # ------------------------------------------------------------------
-# Attack identity  (must match the key in mia_classes in red_team.py)
-# ------------------------------------------------------------------
-attack_model: "mama_mia_pgm"
-
-# ------------------------------------------------------------------
-# Which Blue Team generator to attack.
-# base.py reads config["generator_config"]["name"]  ← must be "name"
-# Change per target generator: dp_pgm / multivariate / cvae / noisy_diffusion
+# Blue Team generator being attacked
 # ------------------------------------------------------------------
 generator_config:
-  name: "dp_pgm"                  # ← "name", NOT "model_name"
-  experiment_name: "epsilon_10.0" # adjust to the Blue Team's experiment tag
+  name: "pgg_pgm"              # PPML-Huskies PRO-GENE-GEN Private PGM
+  epsilon: 7.0                 # DP budget used by Blue Team
+  iterations: 10000
 
 # ------------------------------------------------------------------
-# MAMA-MIA attack parameters.
-# base.py reads config[f"{attack_model}_config"] = config["mama_mia_pgm_config"]
+# MAMA-MIA attack parameters (match these when running attack_submission.py)
 # ------------------------------------------------------------------
-mama_mia_pgm_config:              # ← must be "{attack_model}_config"
-  n_bins: 10                      # discretization bins for continuous genes
-  target_col: ""                  # "" = 1-way marginals only (safe for 978-gene data)
-                                  # Set to a column name for 2-way marginals
+mama_mia_pgm_config:
+  n_bins: 4                    # matches PRO-GENE-GEN alpha=0.25 quantile scheme
+                               # (Q25/Q50/Q75 boundaries → 4 bins)
+  target_col: "cancer_type"    # 2-way (gene, cancer_type) focal points
+  standardize: false           # no StandardScaler; PGM used quantile binning only
+
+# ------------------------------------------------------------------
+# Equivalent CLI command (TCGA-COMBINED)
+# ------------------------------------------------------------------
+# python3 attack_submission.py \
+#     --submission-dir  submission/blueteam_PPML-Huskies_TCGA-COMBINED \
+#     --tcga-dir        ~/privacy/Health-Privacy-Challenge/data/RED_TCGA-COMBINED \
+#     --output-dir      results/ppml_huskies \
+#     --target-col      cancer_type \
+#     --n-bins          4
