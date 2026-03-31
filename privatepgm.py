@@ -27,7 +27,6 @@ from scipy.optimize import bisect
 # Use the same mbi path that MST and PrivBayes already rely on.
 sys.path.insert(0, 'reprosyn-main/src/reprosyn/methods/mbi/')
 from mbi import Dataset, Domain, FactoredInference
-from cdp2adp import cdp_rho
 
 # Generator base from reprosyn (gives us encode_ordinal / decode_ordinal).
 sys.path.insert(1, 'reprosyn-main/src/reprosyn/')
@@ -35,32 +34,47 @@ from generator import PipelineBase, encode_ordinal, decode_ordinal
 
 
 # ---------------------------------------------------------------------------
-# Noise calibration (mirrors model.py's moments_calibration).
+# Noise calibration — exact port of model.py's moments_calibration.
 # ---------------------------------------------------------------------------
 
 def _calibrate_sigma(epsilon, delta):
     """Return Gaussian noise sigma so the TWO-round query is (eps, delta)-DP.
 
-    The reference (model.py moments_calibration(round1=1, round2=1, eps, delta))
-    finds sigma such that composing TWO Gaussian mechanisms (one 1-way round,
-    one 2-way round), each with sensitivity 1 and noise sigma, satisfies
-    (eps, delta)-DP under RDP composition.
+    Direct port of the reference's moments_calibration(round1=1, round2=1, eps, delta).
 
-    Under zCDP each Gaussian mechanism with sensitivity 1 and noise sigma
-    contributes rho_i = 1 / (2 * sigma^2).  Two rounds therefore compose to:
-        rho_total = 1 / sigma^2
+    The reference numerically bisects sigma such that composing two Gaussian
+    mechanisms (each with sensitivity 1 and noise sigma) satisfies (eps, delta)-DP
+    under the standard Mironov 2017 RDP accountant:
 
-    For (eps, delta)-DP we need rho_total <= cdp_rho(eps, delta), giving:
-        sigma >= 1 / sqrt(cdp_rho(eps, delta))
+        rdp_total(alpha) = 2 * alpha / (2 * sigma^2) = alpha / sigma^2
+        eps(alpha)       = rdp_total(alpha) + log(1/delta) / (alpha - 1)
+        eps_final        = min_{alpha in 2..4095} eps(alpha)
 
-    Previously this returned sqrt(1 / (2*rho)), which is calibrated for only
-    ONE round and is ~sqrt(2) too small, effectively spending ~2x epsilon.
+    The reference's obj(sigma) = eps_final - eps + 1e-8, bisected to zero.
     """
     if delta <= 0:
-        # Pure DP via Laplace; return scale = 1/(eps * d) (model.py fallback).
-        return None  # handled separately in privatepgm()
-    rho = cdp_rho(epsilon, delta)
-    return np.sqrt(1.0 / rho)          # two-round composition: rho_total = 1/sigma^2
+        return None  # pure DP / Laplace handled separately in privatepgm()
+
+    orders = range(2, 4096)
+
+    def obj(sigma):
+        # Gaussian RDP for two rounds: rdp(alpha) = alpha / sigma^2
+        # Mironov conversion: eps(alpha) = rdp(alpha) + log(1/delta) / (alpha - 1)
+        eps_rdp = min(
+            a / sigma**2 + np.log(1.0 / delta) / (a - 1)
+            for a in orders
+        )
+        return eps_rdp - epsilon + 1e-8
+
+    low = 1.0
+    high = 1.0
+    while obj(low) < 0:
+        low /= 2.0
+    while obj(high) > 0:
+        high *= 2.0
+    sigma = bisect(obj, low, high)
+    assert obj(sigma) - 1e-8 <= 0, "not differentially private"
+    return sigma
 
 
 # ---------------------------------------------------------------------------
