@@ -78,7 +78,7 @@ def privatepgm(data, cliques, epsilon, delta, rows, num_iters=1000):
     epsilon   : privacy budget
     delta     : delta parameter (use 0 for pure DP / Laplace noise)
     rows      : number of synthetic rows to generate
-    num_iters : FactoredInference mirror-descent iterations
+    num_iters : FactoredInference mirror-descent iterations (reference uses 10000)
 
     Returns
     -------
@@ -139,8 +139,8 @@ def privatepgm(data, cliques, epsilon, delta, rows, num_iters=1000):
             measurements.append((I, y, sigma_2way, cl))
             selected.append(cl)
 
-    engine = FactoredInference(data.domain, iters=num_iters)
-    est = engine.estimate(measurements, total=n)
+    engine = FactoredInference(data.domain, log=True, iters=num_iters)
+    est = engine.estimate(measurements, total=n, engine="MD")
     synth = est.synthetic_data(rows=rows)
 
     # est.cliques gives the maximal cliques in the fitted graphical model
@@ -170,13 +170,13 @@ class PRIVATEPGM(PipelineBase):
                      If None, defaults to the last column.
     cliques        : explicit list of 2-way clique tuples to measure.
                      If None, auto-constructed as all (col, target_variable).
-    num_iters      : FactoredInference iterations  (default 1000)
+    num_iters      : FactoredInference iterations  (default 1000; reference uses 10000)
     """
 
     generator = staticmethod(privatepgm)
 
     def __init__(self, epsilon=1.0, delta=1e-9,
-                 target_variable=None, cliques=None, num_iters=1000, **kw):
+                 target_variable=None, cliques=None, num_iters=10000, **kw):
         parameters = {
             "epsilon": epsilon,
             "delta": delta,
