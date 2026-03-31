@@ -409,13 +409,11 @@ def attack_split(
 
     # --- Output ---
     os.makedirs(output_dir, exist_ok=True)
-    out_path = os.path.join(output_dir, f'synthetic_data_split_{split_idx}_predictions.csv')
+    # Filename matches competition requirement: synthetic_data_N_predictions.csv
+    out_path = os.path.join(output_dir, f'synthetic_data_{split_idx}_predictions.csv')
 
-    out_df = pd.DataFrame(
-        {'membership_label': scores},
-        index=targets.index,
-    )
-    out_df.to_csv(out_path)
+    # No index column — competition format requires single column 'membership_label' only.
+    pd.DataFrame({'membership_label': scores}).to_csv(out_path, index=False)
     print(f"\n  Predictions → {out_path}")
     print(f"  Score range : [{scores.min():.4f}, {scores.max():.4f}]")
 
@@ -449,8 +447,9 @@ def main():
                         help='Directory with the TCGA TSV files and subtypes CSV')
     parser.add_argument('--output-dir', default='results/attack',
                         help='Where to write prediction CSVs')
-    parser.add_argument('--splits', type=int, nargs='+', default=[1, 2, 3, 4, 5],
-                        help='Which splits to attack (default: all 5)')
+    parser.add_argument('--splits', type=int, nargs='+', default=[1, 2, 3, 4],
+                        help='Which splits to attack (default: 1-4, matching competition '
+                             'submission format synthetic_data_1_predictions.csv … _4_)')
     parser.add_argument('--target-col', default='cancer_type',
                         help='Column for 2-way marginals. '
                              'Set to "" to use 1-way only.')
