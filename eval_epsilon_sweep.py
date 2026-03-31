@@ -255,8 +255,9 @@ def main():
         ),
     )
     parser.add_argument(
-        "--n-bins", type=int, default=10,
-        help="Equal-depth discretization bins for continuous features",
+        "--n-bins", type=int, default=4,
+        help="Equal-depth discretization bins for continuous features "
+             "(default 4, matches PRO-GENE-GEN alpha=0.25 quantile scheme)",
     )
     parser.add_argument(
         "--data", default=None,

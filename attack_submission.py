@@ -352,8 +352,22 @@ def attack_split(
     # --- Load ---
     print("  Loading data …")
     synth   = load_synthetic_with_labels(synth_path, labels_path)
-    ref     = load_tsv_with_subtypes(ref_tsv, sub_csv)
     targets = load_tsv_with_subtypes(test_tsv, sub_csv)
+
+    # Reference TSV: try subtypes join; fall back to test TSV if all reference
+    # samples are absent from the subtypes CSV (they are a separate holdout set
+    # with no cancer_type metadata).
+    ref = load_tsv_with_subtypes(ref_tsv, sub_csv)
+    ref_has_no_labels = (
+        target_col
+        and target_col in ref.columns
+        and (ref[target_col] == 'Unknown').all()
+    )
+    if ref_has_no_labels:
+        print(f"  Reference TSV has no '{target_col}' labels "
+              f"(separate holdout set not in subtypes CSV). "
+              f"Using test TSV as P_aux instead.")
+        ref = targets.copy()
 
     print(f"  Synth  : {synth.shape}")
     print(f"  Ref    : {ref.shape}")
