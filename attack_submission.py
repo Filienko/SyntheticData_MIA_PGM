@@ -183,8 +183,60 @@ def load_membership_from_yaml(splits_yaml_path, split_idx, test_sample_ids):
 # Encoding
 # ===========================================================================
 
+def _is_effectively_discrete(df, cols, max_unique=8):
+    """True if every column has at most max_unique distinct values.
+
+    PRO-GENE-GEN's PGM outputs inverse-discretized floats that still have
+    exactly n_bins unique values per column (one per bin representative).
+    """
+    return all(df[col].nunique() <= max_unique for col in cols)
+
+
 def encode_all(synth, ref, targets, gene_cols, n_bins, name='attack'):
-    """StandardScale then equal-depth bin all three DataFrames consistently."""
+    """Discretize all DataFrames into a consistent integer-bin domain.
+
+    Two cases:
+
+    A) Synthetic is already effectively discrete (few unique values per column,
+       e.g. PRO-GENE-GEN PGM output).  Each gene column has exactly n_bins
+       distinct float bin-representatives.
+       - Synthetic : map unique float values → integer ranks 0..k-1
+       - Ref/test  : apply n_bins-quantile binning fitted on reference data
+         (matches PGM's alpha=0.25 quantile scheme; no StandardScaler)
+
+    B) Synthetic is continuous (e.g. our own run_tcga_pgm.py output).
+       - StandardScale → equal-depth bin on synth+ref combined.
+    """
+    if _is_effectively_discrete(synth, gene_cols, max_unique=n_bins + 2):
+        print(f"  Synthetic data is already discretized "
+              f"(≤{n_bins+2} unique values/gene). "
+              f"Ordinal-encoding synth; quantile-binning ref/test with "
+              f"n_bins={n_bins} fitted on reference.")
+
+        # -- Synthetic: rank-order the unique float values per column → 0..k-1
+        synth_enc = synth.copy()
+        for col in gene_cols:
+            sorted_vals = sorted(synth[col].unique())
+            rank_map = {v: i for i, v in enumerate(sorted_vals)}
+            synth_enc[col] = synth[col].map(rank_map).astype(int)
+
+        # -- Reference / targets: quantile binning fitted on reference only.
+        #    np.digitize with n_bins-1 interior boundaries gives bins 0..n_bins-1.
+        ref_enc     = ref.copy()
+        targets_enc = targets.copy()
+        for col in gene_cols:
+            boundaries = np.quantile(
+                ref[col].dropna(),
+                np.linspace(0, 1, n_bins + 1)[1:-1],   # n_bins-1 interior quantiles
+            )
+            ref_enc[col]     = np.digitize(ref[col],     boundaries).astype(int)
+            targets_enc[col] = np.digitize(targets[col], boundaries).astype(int)
+
+        return synth_enc, ref_enc, targets_enc
+
+    # --- Case B: continuous synthetic data ---
+    print(f"  Continuous synthetic data detected. "
+          f"StandardScale + equal-depth {n_bins}-bin encoding …")
     scaler = StandardScaler()
     combined_vals = pd.concat(
         [synth[gene_cols], ref[gene_cols]], ignore_index=True
@@ -200,7 +252,6 @@ def encode_all(synth, ref, targets, gene_cols, n_bins, name='attack'):
     ref     = _scale(ref)
     targets = _scale(targets)
 
-    print(f"  Discretizing {len(gene_cols)} gene features into {n_bins} bins …")
     C.n_bins = n_bins
     combined = pd.concat(
         [synth[gene_cols], ref[gene_cols]], ignore_index=True
@@ -389,8 +440,9 @@ def main():
     parser.add_argument('--target-col', default='cancer_type',
                         help='Column for 2-way marginals. '
                              'Set to "" to use 1-way only.')
-    parser.add_argument('--n-bins', type=int, default=10,
-                        help='Equal-depth bins for discretization')
+    parser.add_argument('--n-bins', type=int, default=4,
+                        help='Bins for discretization (default 4, matches PRO-GENE-GEN '
+                             'quantile scheme with alpha=0.25)')
 
     args = parser.parse_args()
     target_col = args.target_col if args.target_col else None
