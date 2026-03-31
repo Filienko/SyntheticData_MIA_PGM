@@ -147,7 +147,7 @@ def tcga_data(cfg, csv_path=None):
 
     raw = pd.read_csv(csv_path)
     target_col = "Subtype"
-    feature_cols = [c for c in raw.columns if c != target_col]
+    feature_cols = [c for c in raw.columns if c != target_col and c not in [None, ""]  and pd.api.types.is_numeric_dtype(raw[c])]
 
     # Ordinal-encode the categorical Subtype label.
     subtypes = sorted(raw[target_col].unique().tolist())

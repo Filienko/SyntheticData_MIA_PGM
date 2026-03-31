@@ -1,0 +1,48 @@
+# config.yaml  (place this file in the same directory you run the attack from)
+# MAMA-MIA attack on Health-Privacy-Challenge – Track I, Red Team
+#
+# Based on the competition's own config.yaml structure.
+# Key names must match exactly what base.py reads:
+#   base.py reads: config["generator_config"]["name"]       ← "name", not "model_name"
+#   base.py reads: config[f"{attack_model}_config"]         ← "mama_mia_pgm_config"
+# -------------------------------------------------------------------
+
+# ------------------------------------------------------------------
+# Competition repo paths  (adjust to your local clone location)
+# ------------------------------------------------------------------
+dir_list:
+  home: "~/Health-Privacy-Challenge"      # root of competition repo clone
+  data_splits: "data_splits"
+  meta: "data/meta"
+  processed_data: "data/processed"
+  mia_files: "results/mia"               # predictions written here
+
+# ------------------------------------------------------------------
+# Dataset to attack
+# ------------------------------------------------------------------
+dataset_config:
+  name: "TCGA-BRCA"               # or TCGA-COMBINED
+  membership_label_col: "membership_label"
+
+# ------------------------------------------------------------------
+# Attack identity  (must match the key in mia_classes in red_team.py)
+# ------------------------------------------------------------------
+attack_model: "mama_mia_pgm"
+
+# ------------------------------------------------------------------
+# Which Blue Team generator to attack.
+# base.py reads config["generator_config"]["name"]  ← must be "name"
+# Change per target generator: dp_pgm / multivariate / cvae / noisy_diffusion
+# ------------------------------------------------------------------
+generator_config:
+  name: "dp_pgm"                  # ← "name", NOT "model_name"
+  experiment_name: "epsilon_10.0" # adjust to the Blue Team's experiment tag
+
+# ------------------------------------------------------------------
+# MAMA-MIA attack parameters.
+# base.py reads config[f"{attack_model}_config"] = config["mama_mia_pgm_config"]
+# ------------------------------------------------------------------
+mama_mia_pgm_config:              # ← must be "{attack_model}_config"
+  n_bins: 10                      # discretization bins for continuous genes
+  target_col: ""                  # "" = 1-way marginals only (safe for 978-gene data)
+                                  # Set to a column name for 2-way marginals
