@@ -53,6 +53,7 @@ os.makedirs("intermediate/experiment_artifacts/satml25-rebuttal/mamamia_results"
 from util import C, Config, get_data, sample_experimental_data
 from determine_focal_points import determine_privatepgm_marginals
 from conduct_attacks import attack_privatepgm
+import privatepgm as pgm_module
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +61,8 @@ from conduct_attacks import attack_privatepgm
 # ---------------------------------------------------------------------------
 
 def run_sweep(epsilons, n_runs, train_size, n_targets, n_bins,
-              data_path=None, target_col=None, name=None):
+              data_path=None, target_col=None, name=None,
+              save_synth=True, synth_dir="data/synth_data"):
     """Run MAMA-MIA attack across epsilons.
 
     Parameters
@@ -75,6 +77,8 @@ def run_sweep(epsilons, n_runs, train_size, n_targets, n_bins,
     n_bins     : int          equal-depth discretization bins for continuous features
     data_path  : str|None     override CSV path (default: data/tcga_combined_full_100f.csv)
     target_col : str|None     PGM pivot column; None → infer from dataset loader
+    save_synth : bool         if True, save each run's synthetic dataset as a CSV
+    synth_dir  : str          directory to write synthetic CSVs (created if absent)
 
     Returns
     -------
@@ -105,6 +109,14 @@ def run_sweep(epsilons, n_runs, train_size, n_targets, n_bins,
     print(f"Subtype classes: {aux[target_col_name].nunique()}")
     print(f"Epsilons: {epsilons}  |  runs/ε: {n_runs}  |  train_size: {train_size}\n")
 
+    if save_synth:
+        os.makedirs(synth_dir, exist_ok=True)
+
+    # Base name for synth files – matches the artifact namespace used by encode_data.
+    synth_base = name or (
+        os.path.splitext(os.path.basename(data_path))[0] if data_path else "tcga"
+    )
+
     summary_rows = []
     detail_rows  = []
 
@@ -130,11 +142,35 @@ def run_sweep(epsilons, n_runs, train_size, n_targets, n_bins,
             target_ids, targets, membership, train, kde_seed = \
                 sample_experimental_data(cfg, aux, columns)
 
+            # ---------------------------------------------------------------
+            # Generate synthetic data once and optionally save it.
+            # Passing synth= to attack_privatepgm skips re-generation there.
+            # ---------------------------------------------------------------
+            target_var = getattr(cfg, 'pgm_target_variable', None) or columns[-1]
+            pgm_gen = pgm_module.PRIVATEPGM(
+                dataset=train[columns],
+                metadata=meta,
+                size=cfg.synth_size,
+                epsilon=eps,
+                target_variable=target_var,
+            )
+            pgm_gen.run()
+            synth_df = pgm_gen.output.astype(int)
+
+            if save_synth:
+                synth_fname = (
+                    f"{synth_dir}/{synth_base}"
+                    f"_eps{eps:.2f}_run{run+1}"
+                    f"_train{train_size}_bins{n_bins}.csv"
+                )
+                synth_df.to_csv(synth_fname, index=False)
+
             result = attack_privatepgm(
                 cfg, meta, aux, columns, train, eps,
                 targets, target_ids, membership,
                 kde_sample_seed=kde_seed,
                 fps=fps,
+                synth=synth_df,
             )
 
             elapsed = time.process_time() - t0
@@ -270,6 +306,18 @@ def main():
         help="Artifact namespace for binning cache (default: derived from CSV filename). "
              "Set to a unique value when running the same dataset in parallel.",
     )
+    parser.add_argument(
+        "--save-synth", action="store_true", default=True,
+        help="Save each run's synthetic dataset as a CSV (default: True).",
+    )
+    parser.add_argument(
+        "--no-save-synth", dest="save_synth", action="store_false",
+        help="Disable saving synthetic datasets.",
+    )
+    parser.add_argument(
+        "--synth-dir", default="data/synth_data",
+        help="Directory to write synthetic CSVs (created if absent).",
+    )
     args = parser.parse_args()
 
     output_path = args.output or (
@@ -296,6 +344,8 @@ def main():
         data_path=args.data,
         target_col=args.target_col,
         name=args.name,
+        save_synth=args.save_synth,
+        synth_dir=args.synth_dir,
     )
 
     print_summary(summary_df)
