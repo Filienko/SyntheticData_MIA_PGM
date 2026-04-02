@@ -60,7 +60,7 @@ from conduct_attacks import attack_privatepgm
 # ---------------------------------------------------------------------------
 
 def run_sweep(epsilons, n_runs, train_size, n_targets, n_bins,
-              data_path=None, target_col=None):
+              data_path=None, target_col=None, name=None):
     """Run MAMA-MIA attack across epsilons.
 
     Parameters
@@ -96,6 +96,8 @@ def run_sweep(epsilons, n_runs, train_size, n_targets, n_bins,
 
     if data_path:
         cfg.csv_path = os.path.abspath(data_path)
+    if name:
+        cfg.artifact_name = name  # passed through to tcga_data() → overrides filename-derived name
 
     _, aux, columns, meta, _ = get_data(cfg)
     target_col_name = target_col or "Subtype"
@@ -263,6 +265,11 @@ def main():
         "--output", default=None,
         help="CSV path for results (default: results_epsilon_sweep_<timestamp>.csv)",
     )
+    parser.add_argument(
+        "--name", default=None,
+        help="Artifact namespace for binning cache (default: derived from CSV filename). "
+             "Set to a unique value when running the same dataset in parallel.",
+    )
     args = parser.parse_args()
 
     output_path = args.output or (
@@ -288,6 +295,7 @@ def main():
         n_bins=args.n_bins,
         data_path=args.data,
         target_col=args.target_col,
+        name=args.name,
     )
 
     print_summary(summary_df)

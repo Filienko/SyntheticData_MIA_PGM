@@ -164,10 +164,11 @@ def tcga_data(cfg, csv_path=None):
     numeric_columns = feature_cols
     catg_columns = []
 
-    # Derive a unique artifact name from the CSV filename so parallel runs
-    # on different datasets (e.g. tcga_brca_full vs tcga_combined_full) do not
-    # overwrite each other's binning thresholds in data/experiment_artifacts/.
-    data_name = os.path.splitext(os.path.basename(csv_path))[0]  # e.g. "tcga_brca_full"
+    # Derive a unique artifact name so parallel runs don't overwrite each other's
+    # binning thresholds.  Explicit cfg.artifact_name overrides the default
+    # (CSV stem), allowing two runs on the same file to coexist safely.
+    data_name = getattr(cfg, "artifact_name", None) \
+        or os.path.splitext(os.path.basename(csv_path))[0]
 
     # Equal-depth discretisation of continuous features (same as cali/berka).
     fit_continuous_features_equaldepth(raw[feature_cols], data_name)
