@@ -518,6 +518,7 @@ def attack_privatepgm(cfg, meta, aux, columns, train, eps, targets, target_ids, 
         size=cfg.synth_size,
         epsilon=eps,
         target_variable=target_var,
+        num_iters=1000
     )
     try:
         if synth is None:
