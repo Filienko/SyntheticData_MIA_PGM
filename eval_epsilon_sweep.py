@@ -62,7 +62,8 @@ import privatepgm as pgm_module
 
 def run_sweep(epsilons, n_runs, train_size, n_targets, n_bins,
               data_path=None, target_col=None, name=None,
-              save_synth=True, synth_dir="data/synth_data"):
+              save_synth=True, synth_dir="data/synth_data",
+              num_iters=1000):
     """Run MAMA-MIA attack across epsilons.
 
     Parameters
@@ -153,6 +154,7 @@ def run_sweep(epsilons, n_runs, train_size, n_targets, n_bins,
                 size=cfg.synth_size,
                 epsilon=eps,
                 target_variable=target_var,
+                num_iters=num_iters,
             )
             pgm_gen.run()
             synth_df = pgm_gen.output.astype(int)
@@ -307,6 +309,11 @@ def main():
              "Set to a unique value when running the same dataset in parallel.",
     )
     parser.add_argument(
+        "--num-iters", type=int, default=1000,
+        help="FactoredInference mirror-descent iterations for PGM training "
+             "(reference uses 10000; 1000 is faster with similar results).",
+    )
+    parser.add_argument(
         "--save-synth", action="store_true", default=True,
         help="Save each run's synthetic dataset as a CSV (default: True).",
     )
@@ -346,6 +353,7 @@ def main():
         name=args.name,
         save_synth=args.save_synth,
         synth_dir=args.synth_dir,
+        num_iters=args.num_iters,
     )
 
     print_summary(summary_df)
