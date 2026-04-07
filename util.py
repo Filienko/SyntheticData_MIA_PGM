@@ -190,28 +190,28 @@ def area_under_curve(y_true, predictions):
     except ValueError:
         return None
 
-def activate_1(p_rel, confidence=1, center=True) -> np.ndarray:
+def activate_1(p_rel, confidence=1, center=True, centering_percentile=50) -> np.ndarray:
     logs = np.log(p_rel)
-    median = np.median(logs) if center else 0
-    probabilities = 1 / (1 + np.exp(-1 * confidence * (logs - median)))
+    threshold = np.percentile(logs, centering_percentile) if center else 0
+    probabilities = 1 / (1 + np.exp(-1 * confidence * (logs - threshold)))
     return probabilities
 
-def activate_2(p_rel, confidence=1, center=True) -> np.ndarray:
+def activate_2(p_rel, confidence=1, center=True, centering_percentile=50) -> np.ndarray:
     zscores = stats.zscore(p_rel)
-    median = np.median(zscores) if center else 0
-    probabilities = 1 / (1 + np.exp(-1 * confidence * (zscores - median)))
+    threshold = np.percentile(zscores, centering_percentile) if center else 0
+    probabilities = 1 / (1 + np.exp(-1 * confidence * (zscores - threshold)))
     return probabilities
 
-def activate_3(p_rel, confidence=1, center=True) -> np.ndarray:
+def activate_3(p_rel, confidence=1, center=True, centering_percentile=50) -> np.ndarray:
     logs = np.log(p_rel)
     zscores = stats.zscore(logs)
-    median = np.median(zscores) if center else 0
-    probabilities = 1 / (1 + np.exp(-1 * confidence * (zscores - median)))
+    threshold = np.percentile(zscores, centering_percentile) if center else 0
+    probabilities = 1 / (1 + np.exp(-1 * confidence * (zscores - threshold)))
     return probabilities
 
-def activate_4(p_rel, confidence=1, center=True) -> np.ndarray:
-    median = np.median(p_rel) if center else 0
-    probabilities = 1 / (1 + np.exp(-1 * confidence * (p_rel - median)))
+def activate_4(p_rel, confidence=1, center=True, centering_percentile=50) -> np.ndarray:
+    threshold = np.percentile(p_rel, centering_percentile) if center else 0
+    probabilities = 1 / (1 + np.exp(-1 * confidence * (p_rel - threshold)))
     return probabilities
 
 
@@ -442,7 +442,8 @@ def score_attack(cfg, A, num_queries_used, targets, target_ids, membership, acti
     grouped_predictions = predictions.groupby('hhid')
     for hhid in target_ids.tolist():
         scores.append(grouped_predictions.get_group(hhid).A.mean())
-    activated_scores = activation_fn(np.array(scores))
+    pct = getattr(cfg, 'centering_percentile', 50)
+    activated_scores = activation_fn(np.array(scores), centering_percentile=pct)
 
     MA = membership_advantage(membership, activated_scores)
     AUC = area_under_curve(membership, activated_scores)

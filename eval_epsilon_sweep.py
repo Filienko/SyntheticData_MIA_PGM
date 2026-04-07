@@ -32,6 +32,7 @@ Output
 
 import sys
 import os
+import glob
 import argparse
 import time
 import numpy as np
@@ -63,7 +64,8 @@ import privatepgm as pgm_module
 def run_sweep(epsilons, n_runs, train_size, n_targets, n_bins,
               data_path=None, target_col=None, name=None,
               save_synth=True, synth_dir="data/synth_data",
-              num_iters=1000):
+              num_iters=1000, load_synth_dir=None,
+              centering_percentile=50):
     """Run MAMA-MIA attack across epsilons.
 
     Parameters
@@ -103,6 +105,7 @@ def run_sweep(epsilons, n_runs, train_size, n_targets, n_bins,
         cfg.csv_path = os.path.abspath(data_path)
     if name:
         cfg.artifact_name = name  # passed through to tcga_data() → overrides filename-derived name
+    cfg.centering_percentile = centering_percentile
 
     _, aux, columns, meta, _ = get_data(cfg)
     target_col_name = target_col or "Subtype"
@@ -140,32 +143,80 @@ def run_sweep(epsilons, n_runs, train_size, n_targets, n_bins,
         for run in range(n_runs):
             t0 = time.process_time()
 
-            target_ids, targets, membership, train, kde_seed = \
-                sample_experimental_data(cfg, aux, columns)
-
-            # ---------------------------------------------------------------
-            # Generate synthetic data once and optionally save it.
-            # Passing synth= to attack_privatepgm skips re-generation there.
-            # ---------------------------------------------------------------
-            target_var = getattr(cfg, 'pgm_target_variable', None) or columns[-1]
-            pgm_gen = pgm_module.PRIVATEPGM(
-                dataset=train[columns],
-                metadata=meta,
-                size=cfg.synth_size,
-                epsilon=eps,
-                target_variable=target_var,
-                num_iters=num_iters,
-            )
-            pgm_gen.run()
-            synth_df = pgm_gen.output.astype(int)
-
-            if save_synth:
-                synth_fname = (
-                    f"{synth_dir}/{synth_base}"
-                    f"_eps{eps:.2f}_run{run+1}"
-                    f"_train{train_size}_bins{n_bins}.csv"
+            if load_synth_dir:
+                # ----------------------------------------------------------
+                # Load pre-generated synth + membership labels from disk.
+                # File naming convention produced by the save path below:
+                #   <name>_eps<eps>_run<R>_train<T>_bins<B>.csv
+                #   <name>_eps<eps>_run<R>_train<T>_bins<B>_membership.csv
+                # ----------------------------------------------------------
+                pattern = os.path.join(
+                    load_synth_dir,
+                    f"*_eps{eps:.2f}_run{run+1}_train{train_size}_bins{n_bins}.csv"
                 )
-                synth_df.to_csv(synth_fname, index=False)
+                matches = [f for f in glob.glob(pattern)
+                           if not f.endswith("_membership.csv")]
+                if not matches:
+                    print(f"  Run {run+1}: no synth file matching {pattern!r} – skipping")
+                    continue
+                synth_path = matches[0]
+                mem_path   = synth_path.replace(".csv", "_membership.csv")
+                if not os.path.exists(mem_path):
+                    print(f"  Run {run+1}: membership file not found at {mem_path!r} – skipping")
+                    continue
+
+                synth_df = pd.read_csv(synth_path).astype(int)
+                mem_df   = pd.read_csv(mem_path)
+                target_ids_arr = mem_df["target_id"].values
+                membership     = mem_df["is_member"].values
+                targets        = aux.loc[target_ids_arr]
+                # Dummy train (not used when synth= is provided)
+                train    = aux.iloc[:train_size]
+                kde_seed = 0
+            else:
+                # ----------------------------------------------------------
+                # Normal path: sample targets, generate synth, optionally save.
+                # ----------------------------------------------------------
+                target_ids_arr, targets, membership, train, kde_seed = \
+                    sample_experimental_data(cfg, aux, columns)
+
+                target_var = getattr(cfg, 'pgm_target_variable', None) or columns[-1]
+                pgm_gen = pgm_module.PRIVATEPGM(
+                    dataset=train[columns],
+                    metadata=meta,
+                    size=cfg.synth_size,
+                    epsilon=eps,
+                    target_variable=target_var,
+                    num_iters=num_iters,
+                )
+                pgm_gen.run()
+                synth_df = pgm_gen.output.astype(int)
+
+                if save_synth:
+                    synth_fname = (
+                        f"{synth_dir}/{synth_base}"
+                        f"_eps{eps:.2f}_run{run+1}"
+                        f"_train{train_size}_bins{n_bins}.csv"
+                    )
+                    synth_df.to_csv(synth_fname, index=False)
+
+                    # Save membership labels so these synth files can be
+                    # re-attacked later via --load-synth-dir.
+                    member_set = set(
+                        target_ids_arr[membership == 1].tolist()
+                    )
+                    mem_df = pd.DataFrame({
+                        "target_id": target_ids_arr,
+                        "is_member": [
+                            1 if t in member_set else 0
+                            for t in target_ids_arr
+                        ],
+                    })
+                    mem_df.to_csv(synth_fname.replace(".csv", "_membership.csv"),
+                                  index=False)
+
+            # Use target_ids_arr for attack (rename for compat with rest of loop)
+            target_ids = target_ids_arr
 
             result = attack_privatepgm(
                 cfg, meta, aux, columns, train, eps,
@@ -325,6 +376,24 @@ def main():
         "--synth-dir", default="data/synth_data",
         help="Directory to write synthetic CSVs (created if absent).",
     )
+    parser.add_argument(
+        "--load-synth-dir", default=None, metavar="DIR",
+        help=(
+            "Load pre-generated synthetic CSVs from this directory instead of "
+            "running PGM.  Expects files named "
+            "<name>_eps<e>_run<r>_train<t>_bins<b>.csv and matching "
+            "_membership.csv files (produced by a previous sweep run)."
+        ),
+    )
+    parser.add_argument(
+        "--centering-percentile", type=int, default=50,
+        help=(
+            "Percentile used to centre the attack score sigmoid (default 50 = median). "
+            "Set to 80 when ~80%% of targets are members to shift the decision "
+            "boundary so more targets are classified as members. "
+            "Mathematically: scores above the N-th percentile → prob > 0.5 → member."
+        ),
+    )
     args = parser.parse_args()
 
     output_path = args.output or (
@@ -354,6 +423,8 @@ def main():
         save_synth=args.save_synth,
         synth_dir=args.synth_dir,
         num_iters=args.num_iters,
+        load_synth_dir=args.load_synth_dir,
+        centering_percentile=args.centering_percentile,
     )
 
     print_summary(summary_df)
