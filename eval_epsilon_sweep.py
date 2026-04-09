@@ -396,6 +396,28 @@ def main():
     )
     args = parser.parse_args()
 
+    # ------------------------------------------------------------------
+    # Safety checks
+    # ------------------------------------------------------------------
+    if args.load_synth_dir and not args.data:
+        print(
+            "ERROR: --load-synth-dir requires --data pointing to the SAME real "
+            "dataset that was used to generate the synth files.\n"
+            "  P_aux (likelihood-ratio denominator) and the target records are "
+            "both drawn from --data.  Using the wrong dataset silently corrupts "
+            "the attack scores."
+        )
+        sys.exit(1)
+
+    if args.centering_percentile == 50 and args.load_synth_dir:
+        # Remind user if they load external synth but forget to set the percentile.
+        print(
+            "NOTE: --centering-percentile is 50 (default).  "
+            "If your membership CSV has an 80/20 member split, "
+            "use --centering-percentile 20 so that 80% of targets are "
+            "predicted as members."
+        )
+
     output_path = args.output or (
         f"results_epsilon_sweep_{time.strftime('%Y%m%d_%H%M%S')}.csv"
     )
