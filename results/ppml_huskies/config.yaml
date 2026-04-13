@@ -1,48 +1,69 @@
-# config.yaml  (place this file in the same directory you run the attack from)
-# MAMA-MIA attack on Health-Privacy-Challenge – Track I, Red Team
+# config.yaml  – MAMA-MIA Private-PGM attack
+# Health-Privacy-Challenge, Track I Red Team submission
 #
-# Based on the competition's own config.yaml structure.
-# Key names must match exactly what base.py reads:
-#   base.py reads: config["generator_config"]["name"]       ← "name", not "model_name"
-#   base.py reads: config[f"{attack_model}_config"]         ← "mama_mia_pgm_config"
-# -------------------------------------------------------------------
+# Place this file in the directory you run red_team.py from
+# (or pass the full path to open() inside red_team.py if preferred).
+#
+# Switch between TCGA-BRCA and TCGA-COMBINED by changing:
+#   dataset_config.name
+#   mama_mia_pgm_config.target_col
+# -----------------------------------------------------------------------
 
 # ------------------------------------------------------------------
-# Competition repo paths  (adjust to your local clone location)
+# Paths  (adjust home: to your local clone of the competition repo)
 # ------------------------------------------------------------------
 dir_list:
-  home: "~/Health-Privacy-Challenge"      # root of competition repo clone
-  data_splits: "data_splits"
-  meta: "data/meta"
+  home:           "~/Health-Privacy-Challenge"
+  data_splits:    "data_splits"
+  meta:           "data/meta"
   processed_data: "data/processed"
-  mia_files: "results/mia"               # predictions written here
+  mia_files:      "results/mia"      # predictions are written here
 
 # ------------------------------------------------------------------
-# Dataset to attack
+# Dataset  – pick ONE block and comment out the other
 # ------------------------------------------------------------------
+
+## ---- TCGA-BRCA ----
+# dataset_config:
+#   name:                "TCGA-BRCA"
+#   membership_label_col: "membership_label"
+
+## ---- TCGA-COMBINED ----
 dataset_config:
-  name: "TCGA-BRCA"               # or TCGA-COMBINED
+  name:                 "TCGA-COMBINED"
   membership_label_col: "membership_label"
 
 # ------------------------------------------------------------------
-# Attack identity  (must match the key in mia_classes in red_team.py)
+# Which Blue Team generator to attack
+# Change experiment_name to match the Blue Team's epsilon / config tag
+# ------------------------------------------------------------------
+generator_config:
+  name:            "dp_pgm"          # Blue Team generator identifier
+  experiment_name: "epsilon_7.0"     # adjust to the Blue Team's experiment
+
+# ------------------------------------------------------------------
+# Attack model  (must match the key in mia_classes in red_team.py)
 # ------------------------------------------------------------------
 attack_model: "mama_mia_pgm"
 
 # ------------------------------------------------------------------
-# Which Blue Team generator to attack.
-# base.py reads config["generator_config"]["name"]  ← must be "name"
-# Change per target generator: dp_pgm / multivariate / cvae / noisy_diffusion
+# MAMA-MIA attack parameters
+# The key MUST be "{attack_model}_config" → "mama_mia_pgm_config"
 # ------------------------------------------------------------------
-generator_config:
-  name: "dp_pgm"                  # ← "name", NOT "model_name"
-  experiment_name: "epsilon_10.0" # adjust to the Blue Team's experiment tag
+mama_mia_pgm_config:
 
-# ------------------------------------------------------------------
-# MAMA-MIA attack parameters.
-# base.py reads config[f"{attack_model}_config"] = config["mama_mia_pgm_config"]
-# ------------------------------------------------------------------
-mama_mia_pgm_config:              # ← must be "{attack_model}_config"
-  n_bins: 10                      # discretization bins for continuous genes
-  target_col: ""                  # "" = 1-way marginals only (safe for 978-gene data)
-                                  # Set to a column name for 2-way marginals
+  # Quantile bins for discretizing continuous gene-expression values.
+  # 4 matches PRO-GENE-GEN's alpha=0.25 scheme (Q25/Q50/Q75 boundaries).
+  # Use 10 for higher resolution at the cost of sparser marginals.
+  n_bins: 4
+
+  # Column used for 2-way (gene, label) marginals.
+  # TCGA-BRCA    → "Subtype"      (if the synthetic CSV includes it)
+  # TCGA-COMBINED → "cancer_type" (if the synthetic CSV includes it)
+  # ""           → 1-way marginals only (safest for ~1000-gene data)
+  target_col: ""
+
+  # Sigmoid centering percentile.
+  # 50  = median centering (equal predicted member/non-member split).
+  # 20  = 80 % of targets predicted as members (use for 80/20 train splits).
+  centering_percentile: 50
