@@ -1,0 +1,2 @@
+epsilon,run,AUC,MA,cpu_s,train_size,n_targets,n_bins
+10.0,1,0.540475,0.5500859415677294,903.73,700,400,4

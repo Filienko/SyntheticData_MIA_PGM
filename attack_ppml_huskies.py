@@ -304,7 +304,7 @@ def main():
     ds_cfg    = blue_cfg['dataset_config']
     dataset   = ds_cfg['name']
     label_col = ds_cfg['subtype_col_name']
-    eps       = blue_cfg.get('pgg_pgm_config', {}).get('epsilon', 7.0)
+    eps       = blue_cfg.get('pgg_pgm_config', {}).get('epsilon', 10.0)
     iters     = blue_cfg.get('pgg_pgm_config', {}).get('iterations', 10000)
 
     print(f"\nBlue Team parameters:")

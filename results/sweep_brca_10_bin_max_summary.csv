@@ -1,0 +1,2 @@
+epsilon,mean_AUC,std_AUC,mean_MA,std_MA,n_runs,train_size,n_targets,n_bins
+800.0,0.7425,0.0,0.769,0.0,1,300,200,10

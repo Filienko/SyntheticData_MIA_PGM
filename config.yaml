@@ -43,6 +43,6 @@ generator_config:
 # base.py reads config[f"{attack_model}_config"] = config["mama_mia_pgm_config"]
 # ------------------------------------------------------------------
 mama_mia_pgm_config:              # ← must be "{attack_model}_config"
-  n_bins: 10                      # discretization bins for continuous genes
+  n_bins: 4                      # discretization bins for continuous genes
   target_col: ""                  # "" = 1-way marginals only (safe for 978-gene data)
                                   # Set to a column name for 2-way marginals

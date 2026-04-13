@@ -1,0 +1,2 @@
+synth_file,n_synth_rows,n_real_rows,n_features,mean_tvd_1way,std_tvd_1way,mean_tvd_2way,std_tvd_2way,lr_accuracy,lr_f1_macro,baseline_accuracy,baseline_f1_macro
+brca_run_4_10_eps10.00_run1_train700_bins4.csv,700,1089,978,0.25247812628180727,0.006358112783984193,0.31810887001907634,0.028059828396054136,0.7798165137614679,0.47105654761904764,0.8899082568807339,0.8130680525034976
