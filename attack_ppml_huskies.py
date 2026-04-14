@@ -167,13 +167,21 @@ def attack_split(
     synth   = load_synth_with_labels(synth_path, labels_path, label_col)
     targets = load_tsv_with_subtypes(test_tsv, sub_csv)
 
-    # Reference population: prefer _reference.tsv; fall back to targets
+    # Reference population: prefer _reference.tsv; fall back to targets.
+    # We only fall back when target_col is requested AND the reference TSV
+    # has no label annotations — for 1-way gene marginals the label column
+    # in P_aux is not used at all, so an unlabelled reference TSV is fine.
     if ref_tsv:
         ref = load_tsv_with_subtypes(ref_tsv, sub_csv)
-        if (label_col in ref.columns and
-                (ref[label_col] == 'Unknown').all()):
-            print(f"  Reference TSV has no '{label_col}' labels → using test TSV as P_aux.")
+        ref_has_label = (label_col in ref.columns and
+                         not (ref[label_col] == 'Unknown').all())
+        if target_col and not ref_has_label:
+            print(f"  Reference TSV has no '{label_col}' labels and 2-way marginals "
+                  f"were requested → using test TSV as P_aux.")
             ref = targets.copy()
+        elif not ref_has_label:
+            print(f"  Note: reference TSV has no '{label_col}' labels "
+                  f"(OK — using it for 1-way gene marginals only).")
     else:
         print(f"  No reference TSV found → using test TSV as P_aux.")
         ref = targets.copy()

@@ -133,9 +133,13 @@ def attack_split_baselines(
 
     if ref_tsv and use_reference:
         ref = load_tsv_with_subtypes(ref_tsv, sub_csv)
-        if (label_col in ref.columns and (ref[label_col] == 'Unknown').all()):
-            print(f"  Reference TSV has no '{label_col}' labels → using test as P_ref.")
-            ref = targets.copy()
+        ref_has_label = (label_col in ref.columns and
+                         not (ref[label_col] == 'Unknown').all())
+        if not ref_has_label:
+            # Baseline attacks use raw gene arrays only (no label col) —
+            # an unlabelled reference TSV is perfectly fine as P_ref.
+            print(f"  Note: reference TSV has no '{label_col}' labels "
+                  f"(OK — baseline attacks use gene arrays only).")
     else:
         if not ref_tsv:
             print("  No reference TSV → using test TSV as P_ref.")
