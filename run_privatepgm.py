@@ -52,21 +52,36 @@ import privatepgm as pgm_module
 # Discretization (same scheme as tcga_data() in encode_data.py)
 # ---------------------------------------------------------------------------
 
-def quantile_discretize(df: pd.DataFrame, cols: list, n_bins: int) -> pd.DataFrame:
+def quantile_discretize(df: pd.DataFrame, cols: list, n_bins: int):
     """Discretize continuous columns into n_bins equal-depth integer bins.
 
-    Returns a copy with each column replaced by integers 0..n_bins-1.
-    Thresholds are fitted on `df` itself (i.e. the training set).
+    Returns:
+      disc_df      : copy of df with each col replaced by integers 0..n_bins-1
+      bin_means    : dict {col: array of length n_bins} — mean original value
+                     per bin, used to map synthetic integers back to floats
     """
     out = df.copy()
-    boundaries_map = {}
+    bin_means = {}
     for col in cols:
-        vals = df[col].dropna().values
-        # n_bins-1 interior quantiles → np.digitize returns 0..n_bins-1
+        vals = df[col].values
         boundaries = np.quantile(vals, np.linspace(0, 1, n_bins + 1)[1:-1])
-        out[col] = np.digitize(df[col].values, boundaries).astype(int)
-        boundaries_map[col] = boundaries
-    return out, boundaries_map
+        bin_idx = np.digitize(vals, boundaries).astype(int)   # 0..n_bins-1
+        out[col] = bin_idx
+        # Mean of original values falling in each bin
+        bin_means[col] = np.array([
+            vals[bin_idx == b].mean() if (bin_idx == b).any() else np.nan
+            for b in range(n_bins)
+        ])
+    return out, bin_means
+
+
+def dediscretize(synth: pd.DataFrame, gene_cols: list, bin_means: dict) -> pd.DataFrame:
+    """Map synthetic integer bin indices back to the mean value of each bin."""
+    out = synth.copy()
+    for col in gene_cols:
+        means = bin_means[col]
+        out[col] = synth[col].map(lambda b, m=means: float(m[int(b)]))
+    return out
 
 
 def build_metadata(gene_cols: list, target_col: str,
@@ -135,7 +150,7 @@ def run(input_csv:   str,
 
     # ---- Discretize gene columns  --------------------------------------
     print(f"  Discretizing {len(gene_cols)} gene columns into {n_bins} bins …")
-    df_disc, _ = quantile_discretize(df, gene_cols, n_bins)
+    df_disc, bin_means = quantile_discretize(df, gene_cols, n_bins)
     df_disc[target_col] = df[target_col].values  # target already integer
 
     columns = gene_cols + [target_col]
@@ -159,6 +174,10 @@ def run(input_csv:   str,
 
     synth_df = pgm_gen.output.copy()
 
+    # ---- Map gene bins back to original float space --------------------
+    print("  Mapping gene bins → original float values (bin means) …")
+    synth_df = dediscretize(synth_df, gene_cols, bin_means)
+
     # ---- Decode target column back to original labels ------------------
     synth_df[target_col] = synth_df[target_col].map(inv_map)
 
@@ -170,7 +189,7 @@ def run(input_csv:   str,
     # Quick sanity check
     gene_unique = synth_df[gene_cols[0]].nunique()
     label_vc    = synth_df[target_col].value_counts().to_dict()
-    print(f"  First gene unique values : {gene_unique}  (expect ~{n_bins})")
+    print(f"  First gene unique values : {gene_unique}  (expect ~{n_bins}, one float per bin)")
     print(f"  Label distribution       : {label_vc}")
     print(f"{'='*65}\n")
 
