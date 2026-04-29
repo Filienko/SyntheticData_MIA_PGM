@@ -185,6 +185,27 @@ def attack_split_baselines(
     X_ref     = ref[gene_cols].values.astype(np.float64) if ref is not None else None
     X_ref_glc = X_ref  # GAN_leaks_cal uses same reference
 
+    # ---- Impute NaNs (column means from X_G) ---------------------------
+    # baseline.py's LR/RF classifiers reject NaN; impute before passing.
+    col_means = np.nanmean(X_G, axis=0)
+    col_means = np.where(np.isnan(col_means), 0.0, col_means)
+
+    def _impute(X):
+        if not np.isnan(X).any():
+            return X
+        out = X.copy()
+        nan_mask = np.isnan(out)
+        out[nan_mask] = np.take(col_means, np.where(nan_mask)[1])
+        n_filled = nan_mask.sum()
+        print(f"  Imputed {n_filled} NaN values with column means")
+        return out
+
+    X_G       = _impute(X_G)
+    X_test    = _impute(X_test)
+    if X_ref is not None:
+        X_ref     = _impute(X_ref)
+        X_ref_glc = X_ref
+
     print(f"  X_G : {X_G.shape}   X_test : {X_test.shape}"
           f"   X_ref : {X_ref.shape if X_ref is not None else 'None'}")
 
