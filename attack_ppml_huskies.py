@@ -153,7 +153,7 @@ def attack_split(
     labels_path = os.path.join(submission_dir, f'synthetic_labels_split_{split_idx}.csv')
     splits_yaml = os.path.join(submission_dir, f'{dataset}_splits.yaml')
 
-    for p in [synth_path, labels_path, test_tsv, sub_csv]:
+    for p in [synth_path, test_tsv, sub_csv]:
         if not os.path.exists(p):
             raise FileNotFoundError(f"Required file not found: {p}")
 
@@ -164,7 +164,17 @@ def attack_split(
 
     # ---- Load -------------------------------------------------------
     print("  Loading data …")
-    synth   = load_synth_with_labels(synth_path, labels_path, label_col)
+    if os.path.exists(labels_path):
+        synth = load_synth_with_labels(synth_path, labels_path, label_col)
+    else:
+        synth = pd.read_csv(synth_path)
+        if label_col not in synth.columns:
+            raise FileNotFoundError(
+                f"No labels file at {labels_path} and "
+                f"no '{label_col}' column in {synth_path}.\n"
+                f"  Columns in synth: {list(synth.columns[:10])}"
+            )
+        print(f"  No separate labels file — using '{label_col}' column from synth CSV")
     targets = load_tsv_with_subtypes(test_tsv, sub_csv)
 
     # Reference population: prefer _reference.tsv; fall back to targets.

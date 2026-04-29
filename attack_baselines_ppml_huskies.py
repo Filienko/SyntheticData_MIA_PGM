@@ -117,7 +117,7 @@ def attack_split_baselines(
     labels_path = os.path.join(submission_dir, f'synthetic_labels_split_{split_idx}.csv')
     splits_yaml = os.path.join(submission_dir, f'{dataset}_splits.yaml')
 
-    for p in [synth_path, labels_path, test_tsv, sub_csv]:
+    for p in [synth_path, test_tsv, sub_csv]:
         if not os.path.exists(p):
             raise FileNotFoundError(f"Required file not found: {p}")
 
@@ -128,7 +128,24 @@ def attack_split_baselines(
 
     # ---- Load -----------------------------------------------------------
     print("  Loading data …")
-    synth   = load_synth_with_labels(synth_path, labels_path, label_col)
+    synth_raw = pd.read_csv(synth_path)
+
+    if os.path.exists(labels_path):
+        # Standard format: separate labels file
+        labels_df  = pd.read_csv(labels_path)
+        actual_col = label_col if label_col in labels_df.columns else labels_df.columns[0]
+        synth_raw[label_col] = labels_df[actual_col].values
+        print(f"  Labels loaded from {os.path.basename(labels_path)}")
+    elif label_col in synth_raw.columns:
+        # Internal format: label column already present in synth CSV
+        print(f"  No separate labels file — using '{label_col}' column from synth CSV")
+    else:
+        raise FileNotFoundError(
+            f"No labels file at {labels_path} and "
+            f"no '{label_col}' column in {synth_path}.\n"
+            f"  Columns in synth: {list(synth_raw.columns[:10])}"
+        )
+    synth   = synth_raw
     targets = load_tsv_with_subtypes(test_tsv, sub_csv)
 
     if ref_tsv and use_reference:
