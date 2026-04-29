@@ -228,9 +228,9 @@ def main():
                              '{DATASET}_splits.yaml)')
     parser.add_argument('--competition-home', default='~/Health-Privacy-Challenge',
                         help='Root of Health-Privacy-Challenge clone (data files).')
-    parser.add_argument('--competition-repo', default='~/Health-Privacy-Challenge',
+    parser.add_argument('--competition-repo', default=None,
                         help='Root of Health-Privacy-Challenge clone (source code / '
-                             'baseline.py). Usually the same as --competition-home.')
+                             'baseline.py). Defaults to --competition-home.')
     parser.add_argument('--output-dir', default='results/baselines_ppml_huskies',
                         help='Directory for prediction CSVs and summary.')
     parser.add_argument('--splits', nargs='+', type=int, default=[1, 2, 3, 4, 5],
@@ -243,11 +243,12 @@ def main():
 
     submission_dir   = os.path.expanduser(args.submission_dir)
     competition_home = os.path.expanduser(args.competition_home)
+    competition_repo = os.path.expanduser(args.competition_repo or args.competition_home)
     output_dir       = os.path.expanduser(args.output_dir)
 
     # ---- Import run_baselines from the competition repo ----------------
-    print(f"Setting up baseline.py import from: {args.competition_repo}")
-    run_baselines_fn = _setup_baseline_import(args.competition_repo)
+    print(f"Setting up baseline.py import from: {competition_repo}")
+    run_baselines_fn = _setup_baseline_import(competition_repo)
     print("baseline.py imported OK\n")
 
     # ---- Read Blue Team config -----------------------------------------
