@@ -41,7 +41,10 @@ import warnings
 import yaml
 import numpy as np
 import pandas as pd
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import (
+    roc_auc_score, roc_curve, average_precision_score,
+    precision_recall_curve, auc, accuracy_score, f1_score,
+)
 from sklearn.preprocessing import LabelEncoder
 
 warnings.filterwarnings("ignore")
@@ -59,8 +62,68 @@ from attack_ppml_huskies import (
 from attack_submission import (
     load_tsv_with_subtypes,
     load_membership_from_yaml,
-    _tpr_at_fpr,
 )
+
+
+# ---------------------------------------------------------------------------
+# Metric computation  (matches BaseMIAModel._compute_metrics)
+# ---------------------------------------------------------------------------
+
+METRIC_COLS = [
+    'split', 'baseline',
+    'AUC', 'MA',
+    'acc_median', 'acc_best',
+    'AP', 'PR_AUC',
+    'f1_median', 'f1_best',
+    'TPR@FPR=0.01', 'TPR@FPR=0.1',
+    'Precision@5pct',
+]
+
+
+def _compute_precision_top_percent(y_true, scores, top_percent=5):
+    n  = len(scores)
+    k  = max(1, int(np.ceil(n * top_percent / 100)))
+    top_idx    = np.argsort(scores)[-k:][::-1]
+    top_members = y_true[top_idx].sum()
+    return top_members / k
+
+
+def _compute_metrics(y_scores: np.ndarray, y_true: np.ndarray) -> dict:
+    """Full metric suite matching BaseMIAModel._compute_metrics."""
+    y_pred_median = (y_scores > np.median(y_scores)).astype(int)
+
+    thresholds = np.sort(np.unique(y_scores))
+    if len(thresholds) >= 2:
+        f1s = [f1_score(y_true, y_scores > t, zero_division=0) for t in thresholds]
+        best_t   = thresholds[np.argmax(f1s)]
+        y_pred_best = (y_scores > best_t).astype(int)
+    else:
+        y_pred_best = y_pred_median
+
+    auc_sc = roc_auc_score(y_true, y_scores)
+    ap     = average_precision_score(y_true, y_scores)
+    prec, rec, _ = precision_recall_curve(y_true, y_scores)
+    pr_auc = auc(rec, prec)
+
+    fpr, tpr, _ = roc_curve(y_true, y_scores, pos_label=1)
+    tpr_at_001  = float(tpr[(fpr >= 0.01).argmax()])
+    tpr_at_01   = float(tpr[(fpr >= 0.1).argmax()])
+
+    prec5 = _compute_precision_top_percent(y_true, y_scores, top_percent=5)
+
+    return {
+        'AUC':           auc_sc,
+        'MA':            2 * auc_sc - 1,
+        'acc_median':    accuracy_score(y_true, y_pred_median),
+        'acc_best':      accuracy_score(y_true, y_pred_best),
+        'AP':            ap,
+        'PR_AUC':        pr_auc,
+        'f1_median':     f1_score(y_true, y_pred_median, zero_division=0),
+        'f1_best':       f1_score(y_true, y_pred_best,   zero_division=0),
+        'TPR@FPR=0.01':  tpr_at_001,
+        'TPR@FPR=0.1':   tpr_at_01,
+        'Precision@5pct': prec5,
+    }
 
 
 def _setup_baseline_import(competition_repo: str):
@@ -233,20 +296,19 @@ def attack_split_baselines(
             output_dir, f'split_{split_idx}_{baseline_name}_predictions.csv'
         )
         pd.DataFrame({'membership_label': probs}).to_csv(out_path, index=False)
-        print(f"  [{baseline_name}]  score range [{raw.min():.4f}, {raw.max():.4f}]"
-              f"  → {os.path.basename(out_path)}")
 
         if membership is not None:
-            auc_  = roc_auc_score(membership, probs)
-            ma_   = 2 * auc_ - 1
-            tpr_  = _tpr_at_fpr(membership, probs, 0.1)
+            m = _compute_metrics(probs, membership)
             n_mem = int(membership.sum())
-            print(f"         Members {n_mem}/{len(membership)}"
-                  f"  AUC {auc_:.4f}  MA {ma_:.4f}  TPR@0.1 {tpr_:.4f}")
-            rows.append({
-                'split': split_idx, 'baseline': baseline_name,
-                'AUC': auc_, 'MA': ma_, 'TPR@FPR=0.1': tpr_,
-            })
+            print(f"  [{baseline_name}]  Members {n_mem}/{len(membership)}"
+                  f"  AUC {m['AUC']:.4f}  MA {m['MA']:.4f}"
+                  f"  TPR@0.1 {m['TPR@FPR=0.1']:.4f}"
+                  f"  Prec@5% {m['Precision@5pct']:.4f}"
+                  f"  → {os.path.basename(out_path)}")
+            rows.append({'split': split_idx, 'baseline': baseline_name, **m})
+        else:
+            print(f"  [{baseline_name}]  score range [{raw.min():.4f}, {raw.max():.4f}]"
+                  f"  → {os.path.basename(out_path)}")
 
     return pd.DataFrame(rows)
 
@@ -317,26 +379,39 @@ def main():
     if all_rows:
         full = pd.concat(all_rows, ignore_index=True)
         if not full.empty:
-            print(f"\n{'='*72}")
-            print(f"Summary  ({dataset}  |  ε={eps})")
-            print(f"{'='*72}")
+            metric_cols = [c for c in full.columns if c not in ('split', 'baseline')]
 
+            # Build mean rows (split='mean') per baseline
+            mean_rows = []
+            for baseline, grp in full.groupby('baseline'):
+                row = {'split': 'mean', 'baseline': baseline}
+                row.update(grp[metric_cols].mean().to_dict())
+                mean_rows.append(row)
+            mean_df = pd.DataFrame(mean_rows)
+            full_with_mean = pd.concat([full, mean_df], ignore_index=True)
+
+            print(f"\n{'='*80}")
+            print(f"Summary  ({dataset}  |  ε={eps})")
+            print(f"{'='*80}")
+            hdr_metrics = ['AUC','MA','acc_best','f1_best',
+                           'TPR@FPR=0.01','TPR@FPR=0.1','Precision@5pct']
             for baseline, grp in full.groupby('baseline'):
                 print(f"\n  [{baseline}]")
-                print(f"  {'Split':>6}  {'AUC':>8}  {'MA':>8}  {'TPR@0.1':>9}")
-                print('  ' + '-'*36)
+                header = f"  {'Split':>6}" + "".join(f"  {m:>12}" for m in hdr_metrics)
+                print(header)
+                print('  ' + '-' * (len(header) - 2))
                 for _, row in grp.iterrows():
-                    print(f"  {int(row['split']):>6}  {row['AUC']:>8.4f}"
-                          f"  {row['MA']:>8.4f}  {row['TPR@FPR=0.1']:>9.4f}")
+                    vals = "".join(f"  {row[m]:>12.4f}" for m in hdr_metrics)
+                    print(f"  {int(row['split']):>6}{vals}")
                 if len(grp) > 1:
-                    print('  ' + '-'*36)
-                    print(f"  {'mean':>6}  {grp['AUC'].mean():>8.4f}"
-                          f"  {grp['MA'].mean():>8.4f}"
-                          f"  {grp['TPR@FPR=0.1'].mean():>9.4f}")
+                    print('  ' + '-' * (len(header) - 2))
+                    mrow = mean_df[mean_df['baseline'] == baseline].iloc[0]
+                    vals = "".join(f"  {mrow[m]:>12.4f}" for m in hdr_metrics)
+                    print(f"  {'mean':>6}{vals}")
 
-            print(f"\n{'='*72}")
+            print(f"\n{'='*80}")
             summary_path = os.path.join(output_dir, 'baselines_summary.csv')
-            full.to_csv(summary_path, index=False)
+            full_with_mean.to_csv(summary_path, index=False)
             print(f"Summary  → {summary_path}")
 
     print(f"\nPrediction files in {output_dir}/")
