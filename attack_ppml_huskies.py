@@ -49,7 +49,6 @@ import warnings
 import yaml
 import numpy as np
 import pandas as pd
-from sklearn.metrics import roc_auc_score
 
 warnings.filterwarnings("ignore")
 
@@ -65,7 +64,7 @@ from attack_submission import (
     encode_all,
     build_focal_points,
     mama_mia_score,
-    _tpr_at_fpr,
+    compute_metrics,
 )
 
 
@@ -246,17 +245,17 @@ def attack_split(
     if membership is not None:
         lo, hi = scores.min(), scores.max()
         probs  = (scores - lo) / (hi - lo) if hi > lo else np.full_like(scores, 0.5)
-        auc_   = roc_auc_score(membership, probs)
-        ma_    = 2 * auc_ - 1
-        tpr_   = _tpr_at_fpr(membership, probs, 0.1)
+        m      = compute_metrics(probs, membership)
         n_mem  = int(membership.sum())
         print(f"  Members: {n_mem} / Non-members: {len(membership) - n_mem}")
-        print(f"  AUC-ROC        : {auc_:.4f}")
-        print(f"  Membership Adv : {ma_:.4f}")
-        print(f"  TPR@FPR=0.1    : {tpr_:.4f}")
-        return auc_, ma_
+        print(f"  AUC-ROC        : {m['AUC']:.4f}")
+        print(f"  Membership Adv : {m['MA']:.4f}")
+        print(f"  TPR@FPR=0.1    : {m['TPR@FPR=0.1']:.4f}")
+        print(f"  PR_AUC         : {m['PR_AUC']:.4f}")
+        print(f"  Precision@5pct : {m['Precision@5pct']:.4f}")
+        return m
 
-    return None, None
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -334,9 +333,9 @@ def main():
     print(f"  2-way marginals: {'yes, with ' + label_col if args.use_target_col else 'no (1-way only)'}")
 
     # ---- Attack each split ------------------------------------------
-    results = []
+    rows = []
     for s in args.splits:
-        auc, ma = attack_split(
+        m = attack_split(
             split_idx        = s,
             submission_dir   = submission_dir,
             competition_home = competition_home,
@@ -345,27 +344,35 @@ def main():
             n_bins           = args.n_bins,
             use_target_col   = args.use_target_col,
         )
-        results.append({'split': s, 'AUC': auc, 'MA': ma})
+        if m is not None:
+            rows.append({'split': s, **m})
 
     # ---- Print summary ----------------------------------------------
-    df = pd.DataFrame(results)
-    valid = df.dropna(subset=['AUC'])
-    if not valid.empty:
-        print(f"\n{'='*65}")
+    if rows:
+        df   = pd.DataFrame(rows)
+        mean = df.drop(columns='split').mean().to_dict()
+        mean['split'] = 'mean'
+        df_out = pd.concat([df, pd.DataFrame([mean])], ignore_index=True)
+
+        hdr_metrics = ['AUC','MA','acc_best','f1_best',
+                       'TPR@FPR=0.01','TPR@FPR=0.1','PR_AUC','Precision@5pct']
+        print(f"\n{'='*80}")
         print(f"Summary  ({dataset}  |  ε={eps}  |  bins={args.n_bins})")
-        print(f"{'='*65}")
-        print(f"{'Split':>6}  {'AUC':>8}  {'MA':>8}")
-        print('-' * 28)
-        for _, row in valid.iterrows():
-            print(f"{int(row['split']):>6}  {row['AUC']:>8.4f}  {row['MA']:>8.4f}")
-        if len(valid) > 1:
-            print('-' * 28)
-            print(f"{'mean':>6}  {valid['AUC'].mean():>8.4f}  {valid['MA'].mean():>8.4f}")
-            print(f"{'std':>6}  {valid['AUC'].std():>8.4f}  {valid['MA'].std():>8.4f}")
-        print('=' * 65)
+        print(f"{'='*80}")
+        header = f"  {'Split':>6}" + "".join(f"  {m:>14}" for m in hdr_metrics)
+        print(header)
+        print('  ' + '-' * (len(header) - 2))
+        for _, row in df.iterrows():
+            vals = "".join(f"  {row[m]:>14.4f}" for m in hdr_metrics)
+            print(f"  {int(row['split']):>6}{vals}")
+        if len(df) > 1:
+            print('  ' + '-' * (len(header) - 2))
+            vals = "".join(f"  {mean[m]:>14.4f}" for m in hdr_metrics)
+            print(f"  {'mean':>6}{vals}")
+        print('=' * 80)
 
         summary_path = os.path.join(output_dir, 'attack_summary.csv')
-        valid.to_csv(summary_path, index=False)
+        df_out.to_csv(summary_path, index=False)
         print(f"\nSummary → {summary_path}")
 
     print(f"\nPrediction files in {output_dir}/")

@@ -36,7 +36,11 @@ import warnings
 import numpy as np
 import pandas as pd
 import yaml
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import (
+    roc_auc_score, roc_curve, average_precision_score,
+    precision_recall_curve, auc as sklearn_auc,
+    accuracy_score, f1_score,
+)
 from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings("ignore")
@@ -313,10 +317,52 @@ def mama_mia_score(synth_enc, ref_enc, targets_enc, focal_points):
 
 
 def _tpr_at_fpr(labels, scores, fpr_target=0.1):
-    from sklearn.metrics import roc_curve
     fpr, tpr, _ = roc_curve(labels, scores)
     idx = np.searchsorted(fpr, fpr_target)
     return float(tpr[min(idx, len(tpr) - 1)])
+
+
+def _compute_precision_top_percent(y_true, scores, top_percent=5):
+    n   = len(scores)
+    k   = max(1, int(np.ceil(n * top_percent / 100)))
+    top_idx = np.argsort(scores)[-k:][::-1]
+    return float(y_true[top_idx].sum() / k)
+
+
+def compute_metrics(y_scores: np.ndarray, y_true: np.ndarray) -> dict:
+    """Full metric suite matching BaseMIAModel._compute_metrics."""
+    y_pred_median = (y_scores > np.median(y_scores)).astype(int)
+
+    thresholds = np.sort(np.unique(y_scores))
+    if len(thresholds) >= 2:
+        f1s     = [f1_score(y_true, y_scores > t, zero_division=0) for t in thresholds]
+        best_t  = thresholds[np.argmax(f1s)]
+        y_pred_best = (y_scores > best_t).astype(int)
+    else:
+        y_pred_best = y_pred_median
+
+    auc_sc = roc_auc_score(y_true, y_scores)
+    ap     = average_precision_score(y_true, y_scores)
+    prec, rec, _ = precision_recall_curve(y_true, y_scores)
+    pr_auc = sklearn_auc(rec, prec)
+
+    fpr, tpr, _ = roc_curve(y_true, y_scores, pos_label=1)
+    tpr_at_001  = float(tpr[(fpr >= 0.01).argmax()])
+    tpr_at_01   = float(tpr[(fpr >= 0.1).argmax()])
+
+    return {
+        'AUC':            auc_sc,
+        'MA':             2 * auc_sc - 1,
+        'acc_median':     accuracy_score(y_true, y_pred_median),
+        'acc_best':       accuracy_score(y_true, y_pred_best),
+        'AP':             ap,
+        'PR_AUC':         pr_auc,
+        'f1_median':      f1_score(y_true, y_pred_median, zero_division=0),
+        'f1_best':        f1_score(y_true, y_pred_best,   zero_division=0),
+        'TPR@FPR=0.01':   tpr_at_001,
+        'TPR@FPR=0.1':    tpr_at_01,
+        'Precision@5pct': _compute_precision_top_percent(y_true, y_scores),
+    }
 
 
 # ===========================================================================
