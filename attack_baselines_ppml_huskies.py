@@ -127,7 +127,18 @@ def _compute_metrics(y_scores: np.ndarray, y_true: np.ndarray) -> dict:
 
 
 def _setup_baseline_import(competition_repo: str):
-    """Add competition repo src/ to sys.path so baseline.py is importable."""
+    """Set up sys.path so mia/baselines.py (local) is importable.
+
+    The local mia/baselines.py is imported for run_baselines().
+    The competition repo src/ is added afterwards so that its transitive
+    dependencies (mia.utils, mia.models.base, domias) resolve correctly.
+    """
+    # Local repo root first → mia.baselines resolves to ./mia/baselines.py
+    repo_root = os.path.dirname(os.path.abspath(__file__))
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+
+    # Competition repo for transitive deps (mia.utils, mia.models.base, domias)
     src_dir = os.path.join(os.path.expanduser(competition_repo), 'src')
     if not os.path.isdir(src_dir):
         raise FileNotFoundError(
@@ -135,10 +146,9 @@ def _setup_baseline_import(competition_repo: str):
             f"Clone with: git clone https://github.com/PMBio/Health-Privacy-Challenge.git"
         )
     if src_dir not in sys.path:
-        sys.path.insert(0, src_dir)
+        sys.path.append(src_dir)
 
-    # Import the three standalone scoring functions we need
-    from mia.models.baseline import run_baselines  # noqa: F401
+    from mia.baselines import run_baselines  # noqa: F401  — local mia/baselines.py
     return run_baselines
 
 
