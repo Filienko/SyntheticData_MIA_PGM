@@ -148,7 +148,7 @@ def _setup_baseline_import(competition_repo: str):
     if src_dir not in sys.path:
         sys.path.append(src_dir)
 
-    from mia.baselines import run_baselines  # noqa: F401  — local mia/baselines.py
+    from mia.utils.baseline import run_baselines  # noqa: F401  — local mia/utils/baseline.py
     return run_baselines
 
 
