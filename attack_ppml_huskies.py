@@ -176,10 +176,12 @@ def attack_split(
         print(f"  No separate labels file — using '{label_col}' column from synth CSV")
     targets = load_tsv_with_subtypes(test_tsv, sub_csv)
 
-    # Reference population: prefer _reference.tsv; fall back to targets.
-    # We only fall back when target_col is requested AND the reference TSV
-    # has no label annotations — for 1-way gene marginals the label column
-    # in P_aux is not used at all, so an unlabelled reference TSV is fine.
+    # Reference population priority:
+    #  1. _reference.tsv sibling of count_file (held-out non-members)
+    #  2. test_split_N.csv in submission_dir  (non-members for this split)
+    #  3. Full test TSV as last resort         (contains members — degrades LR)
+    test_split_csv = os.path.join(submission_dir, f'test_split_{split_idx}.csv')
+
     if ref_tsv:
         ref = load_tsv_with_subtypes(ref_tsv, sub_csv)
         ref_has_label = (label_col in ref.columns and
@@ -191,8 +193,21 @@ def attack_split(
         elif not ref_has_label:
             print(f"  Note: reference TSV has no '{label_col}' labels "
                   f"(OK — using it for 1-way gene marginals only).")
+    elif os.path.exists(test_split_csv):
+        # Non-member split CSV (samples × genes, comma-separated, no subtype join needed)
+        ref_raw = pd.read_csv(test_split_csv)
+        # Attach subtype labels if possible (needed for 2-way marginals)
+        if label_col not in ref_raw.columns:
+            ref_raw[label_col] = 'Unknown'
+        ref = ref_raw
+        print(f"  No _reference.tsv → using non-member split: "
+              f"{os.path.basename(test_split_csv)}  ({ref.shape[0]} samples)")
+        if target_col and (ref[label_col] == 'Unknown').all():
+            print(f"  Warning: test_split CSV has no '{label_col}' labels — "
+                  f"2-way marginals will be degraded. Consider --use-target-col=False.")
     else:
-        print(f"  No reference TSV found → using test TSV as P_aux.")
+        print(f"  No reference TSV or test_split CSV found → using full test TSV as P_aux.")
+        print(f"  WARNING: test TSV contains training members; LR scores may collapse.")
         ref = targets.copy()
 
     print(f"  Synth  : {synth.shape}")
