@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 output.csv
 submission/*
+
+*.csv
+

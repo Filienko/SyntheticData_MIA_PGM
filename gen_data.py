@@ -12,7 +12,6 @@ from models import GSD
 from jax.random import PRNGKey
 
 
-
 def determine_fps_GDS():
     data_size = 316
 
