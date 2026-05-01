@@ -121,10 +121,19 @@ def attack_split(
     output_dir:        str,
     n_bins:            int,
     use_target_col:    bool,
+    ref_mode:          str = 'auto',
 ) -> tuple:
     """Attack one split of the PPML-Huskies submission.
 
-    Returns (auc, ma) or (None, None) if labels not available.
+    Parameters
+    ----------
+    ref_mode : 'auto' | 'full'
+        'auto'  – priority: _reference.tsv > test_split_N.csv > full test TSV
+        'full'  – always use full test TSV as P_ref; required when 2-way
+                  (gene, subtype) marginals are desired, because test_split_N
+                  CSVs carry no subtype labels.
+
+    Returns metric dict, or None if labels are unavailable.
     """
     print(f"\n{'='*65}")
     print(f"Split {split_idx}")
@@ -176,13 +185,24 @@ def attack_split(
         print(f"  No separate labels file — using '{label_col}' column from synth CSV")
     targets = load_tsv_with_subtypes(test_tsv, sub_csv)
 
-    # Reference population priority:
-    #  1. _reference.tsv sibling of count_file (held-out non-members)
-    #  2. test_split_N.csv in submission_dir  (non-members for this split)
-    #  3. Full test TSV as last resort         (contains members — degrades LR)
+    # ---- Reference population selection --------------------------------
+    # ref_mode='full'  → always use full test TSV (members+non-members).
+    #                    Required for 2-way (gene, subtype) marginals because
+    #                    test_split_N.csv files carry no subtype labels.
+    #                    The joint P_ref(bin, subtype) is non-uniform even though
+    #                    P_ref(bin) is uniform, so 2-way marginals still give signal.
+    # ref_mode='auto'  → priority: _reference.tsv > test_split_N.csv > full TSV
     test_split_csv = os.path.join(submission_dir, f'test_split_{split_idx}.csv')
 
-    if ref_tsv:
+    if ref_mode == 'full':
+        ref = targets.copy()
+        print(f"  ref_mode=full → P_ref = full test TSV "
+              f"(members+non-members, n={ref.shape[0]}, has '{label_col}' labels)")
+        if not target_col:
+            print(f"  Note: full test TSV as P_ref with 1-way only — "
+                  f"1-way P_ref will be uniform (equal-depth on targets). "
+                  f"Consider --use-target-col for non-trivial 2-way signal.")
+    elif ref_tsv:
         ref = load_tsv_with_subtypes(ref_tsv, sub_csv)
         ref_has_label = (label_col in ref.columns and
                          not (ref[label_col] == 'Unknown').all())
@@ -194,9 +214,7 @@ def attack_split(
             print(f"  Note: reference TSV has no '{label_col}' labels "
                   f"(OK — using it for 1-way gene marginals only).")
     elif os.path.exists(test_split_csv):
-        # Non-member split CSV (samples × genes, comma-separated, no subtype join needed)
         ref_raw = pd.read_csv(test_split_csv)
-        # Attach subtype labels if possible (needed for 2-way marginals)
         if label_col not in ref_raw.columns:
             ref_raw[label_col] = 'Unknown'
         ref = ref_raw
@@ -204,10 +222,10 @@ def attack_split(
               f"{os.path.basename(test_split_csv)}  ({ref.shape[0]} samples)")
         if target_col and (ref[label_col] == 'Unknown').all():
             print(f"  Warning: test_split CSV has no '{label_col}' labels — "
-                  f"2-way marginals will be degraded. Consider --use-target-col=False.")
+                  f"2-way marginals will be degraded. Use --ref-mode full instead.")
     else:
         print(f"  No reference TSV or test_split CSV found → using full test TSV as P_aux.")
-        print(f"  WARNING: test TSV contains training members; LR scores may collapse.")
+        print(f"  WARNING: with 1-way only, LR signal may collapse (P_ref forced uniform).")
         ref = targets.copy()
 
     print(f"  Synth  : {synth.shape}")
@@ -319,9 +337,17 @@ def main():
         '--use-target-col', action='store_true', default=False,
         help=(
             'Add 2-way (gene, label) marginals to the focal point set. '
-            'Disabled by default because ~1000 genes × K subtypes creates '
-            'very sparse 2-way marginals. '
-            'Enable only when using a small gene subset (< 200 features).'
+            'Doubles focal point count (978 → 1956 for BRCA). '
+            'Requires subtype labels in P_ref; use --ref-mode full when '
+            'test_split CSVs carry no subtype annotations.'
+        ),
+    )
+    parser.add_argument(
+        '--ref-mode', choices=['auto', 'full'], default='auto',
+        help=(
+            "'auto': use _reference.tsv > test_split_N.csv > full test TSV. "
+            "'full': always use the full test TSV (members+non-members) as P_ref. "
+            "Required with --use-target-col when test_split CSVs have no subtype labels."
         ),
     )
     args = parser.parse_args()
@@ -347,6 +373,7 @@ def main():
     print(f"  Iterations: {iters}")
     print(f"  n_bins    : {args.n_bins}  (Blue Team hardcodes 4 bins)")
     print(f"  2-way marginals: {'yes, with ' + label_col if args.use_target_col else 'no (1-way only)'}")
+    print(f"  ref_mode  : {args.ref_mode}")
 
     # ---- Attack each split ------------------------------------------
     rows = []
@@ -359,6 +386,7 @@ def main():
             output_dir       = output_dir,
             n_bins           = args.n_bins,
             use_target_col   = args.use_target_col,
+            ref_mode         = args.ref_mode,
         )
         if m is not None:
             rows.append({'split': s, **m})
@@ -373,7 +401,8 @@ def main():
         hdr_metrics = ['AUC','MA','acc_best','f1_best',
                        'TPR@FPR=0.01','TPR@FPR=0.1','PR_AUC','Precision@5pct']
         print(f"\n{'='*80}")
-        print(f"Summary  ({dataset}  |  ε={eps}  |  bins={args.n_bins})")
+        marginals = f"2-way({label_col})" if args.use_target_col else "1-way"
+        print(f"Summary  ({dataset}  |  ε={eps}  |  bins={args.n_bins}  |  {marginals}  |  ref={args.ref_mode})")
         print(f"{'='*80}")
         header = f"  {'Split':>6}" + "".join(f"  {m:>14}" for m in hdr_metrics)
         print(header)
