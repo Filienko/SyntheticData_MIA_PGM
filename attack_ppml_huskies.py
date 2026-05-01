@@ -110,6 +110,31 @@ def resolve_path(competition_home: str, relative_path: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Shared helper
+# ---------------------------------------------------------------------------
+
+def _try_join_subtype_early(df: pd.DataFrame, sub_csv: str,
+                             label_col: str) -> pd.DataFrame:
+    """Join label_col from sub_csv onto df using its index as sample IDs."""
+    if label_col in df.columns and not (df[label_col] == 'Unknown').all():
+        return df
+    sub = pd.read_csv(sub_csv, index_col=0)
+    if 'samplesID' in sub.columns:
+        sub = sub.set_index('samplesID')
+    lbl_src = label_col if label_col in sub.columns else sub.columns[0]
+    joined = df.join(sub[[lbl_src]].rename(columns={lbl_src: label_col}),
+                     how='left')
+    n_joined = int(joined[label_col].notna().sum())
+    joined[label_col] = joined[label_col].fillna('Unknown')
+    if n_joined > 0:
+        print(f"    Subtype join: {n_joined}/{len(df)} samples matched")
+    else:
+        print(f"    Subtype join: no sample IDs matched sub_csv — "
+              f"'{label_col}' left as 'Unknown'")
+    return joined
+
+
+# ---------------------------------------------------------------------------
 # Per-split attack
 # ---------------------------------------------------------------------------
 
@@ -123,19 +148,20 @@ def attack_split(
     use_target_col:    bool,
     ref_mode:          str = 'auto',
     ref_csv:           str = None,
+    train_csv:         str = None,
 ) -> tuple:
     """Attack one split of the PPML-Huskies submission.
 
     Parameters
     ----------
-    ref_mode : 'auto' | 'full'
-        'auto'  – priority: _reference.tsv > test_split_N.csv > full test TSV.
-                  test_split_N.csv labels are joined from sub_csv when possible.
-        'full'  – force full test TSV as P_ref.
-    ref_csv  : str or None
-        If set, load this CSV directly as P_ref (overrides ref_mode).
-        Must contain ENSG* gene columns; label_col optional (auto-joined from
-        sub_csv if the index/first column contains recognisable sample IDs).
+    ref_mode  : 'auto' | 'full'
+    ref_csv   : override P_ref with this CSV (auto Subtype join attempted).
+    train_csv : override P_synth with this CSV (the actual training split,
+                e.g. train_split_N.csv).  Bypasses DP-noised synthetic data.
+                The training distribution is NOT forced to be uniform, so
+                2-way (gene, Subtype) marginals give genuine LR signal even
+                when using a contaminated or full-pool P_ref.
+                Subtype labels are auto-joined from sub_csv.
 
     Returns metric dict, or None if labels are unavailable.
     """
@@ -176,7 +202,19 @@ def attack_split(
 
     # ---- Load -------------------------------------------------------
     print("  Loading data …")
-    if os.path.exists(labels_path):
+    targets = load_tsv_with_subtypes(test_tsv, sub_csv)
+
+    if train_csv:
+        # Use actual training split directly as P_synth proxy.
+        # This bypasses DP noise; the joint (gene, Subtype) distribution is
+        # the real training distribution and is NOT forced to be uniform.
+        synth_raw = pd.read_csv(train_csv, index_col=0)
+        synth_raw = _try_join_subtype_early(synth_raw, sub_csv, label_col)
+        synth = synth_raw
+        print(f"  P_synth = train_csv: {os.path.basename(train_csv)}  "
+              f"(n={synth.shape[0]}, '{label_col}' known: "
+              f"{(synth[label_col] != 'Unknown').sum() if label_col in synth.columns else 0})")
+    elif os.path.exists(labels_path):
         synth = load_synth_with_labels(synth_path, labels_path, label_col)
     else:
         synth = pd.read_csv(synth_path)
@@ -187,7 +225,6 @@ def attack_split(
                 f"  Columns in synth: {list(synth.columns[:10])}"
             )
         print(f"  No separate labels file — using '{label_col}' column from synth CSV")
-    targets = load_tsv_with_subtypes(test_tsv, sub_csv)
 
     # ---- Reference population selection --------------------------------
     # Priority (highest to lowest):
@@ -199,28 +236,7 @@ def attack_split(
     test_split_csv = os.path.join(submission_dir, f'test_split_{split_idx}.csv')
 
     def _try_join_subtype(df: pd.DataFrame) -> pd.DataFrame:
-        """Attempt to join label_col from sub_csv onto df using its index."""
-        if label_col in df.columns and not (df[label_col] == 'Unknown').all():
-            return df          # already has labels
-        sub = pd.read_csv(sub_csv, index_col=0)
-        if 'samplesID' in sub.columns:
-            sub = sub.set_index('samplesID')
-        # find which column in sub has the label
-        lbl_src = label_col if label_col in sub.columns else None
-        if lbl_src is None:
-            # try first non-index column
-            lbl_src = sub.columns[0]
-        joined = df.join(sub[[lbl_src]].rename(columns={lbl_src: label_col}),
-                         how='left')
-        n_joined = joined[label_col].notna().sum()
-        joined[label_col] = joined[label_col].fillna('Unknown')
-        if n_joined > 0:
-            print(f"  Subtype join: {n_joined}/{len(df)} samples matched "
-                  f"in {os.path.basename(sub_csv)}")
-        else:
-            print(f"  Subtype join: no sample IDs matched sub_csv "
-                  f"(index mismatch) — '{label_col}' left as 'Unknown'")
-        return joined
+        return _try_join_subtype_early(df, sub_csv, label_col)
 
     if ref_csv:
         ref = pd.read_csv(ref_csv, index_col=0)
@@ -393,10 +409,21 @@ def main():
         '--ref-csv', default=None,
         help=(
             'Path to a CSV file to use directly as P_ref (overrides --ref-mode). '
-            'Must have ENSG* gene columns as column headers and sample IDs as the '
-            'index (row 0 = header, col 0 = sample ID). Subtype labels are '
-            'auto-joined from sub_csv if not already present. '
+            'Must have ENSG* gene columns and sample IDs as the index. '
+            'Subtype labels are auto-joined from sub_csv if missing. '
             'Example: --ref-csv data/tcga_brca_full.csv'
+        ),
+    )
+    parser.add_argument(
+        '--train-csv', default=None,
+        help=(
+            'Path to a CSV with actual training-split gene expression '
+            '(e.g. train_split_N.csv inside the submission dir). '
+            'When set, this replaces the DP-noised synthetic data as P_synth. '
+            'The joint (gene, Subtype) distribution is NOT forced to be uniform, '
+            'giving genuine 2-way marginal signal even with a contaminated P_ref. '
+            'Use with --use-target-col. '
+            'Supports {N} placeholder: --train-csv submission/.../train_split_{N}.csv'
         ),
     )
     args = parser.parse_args()
@@ -422,15 +449,23 @@ def main():
     print(f"  Iterations: {iters}")
     print(f"  n_bins    : {args.n_bins}  (Blue Team hardcodes 4 bins)")
     print(f"  2-way marginals: {'yes, with ' + label_col if args.use_target_col else 'no (1-way only)'}")
-    ref_csv = os.path.expanduser(args.ref_csv) if args.ref_csv else None
+    ref_csv   = os.path.expanduser(args.ref_csv)   if args.ref_csv   else None
+    train_csv = os.path.expanduser(args.train_csv) if args.train_csv else None
     print(f"  ref_mode  : {args.ref_mode}"
           + (f"  (overridden by --ref-csv {os.path.basename(ref_csv)})" if ref_csv else ""))
     if ref_csv:
         print(f"  ref_csv   : {ref_csv}")
+    if train_csv:
+        print(f"  train_csv : {train_csv}  (replaces synthetic data as P_synth)")
+        if not args.use_target_col:
+            print(f"  NOTE: --train-csv is most useful with --use-target-col "
+                  f"(1-way marginals from train data are also uniform by equal-depth design).")
 
     # ---- Attack each split ------------------------------------------
     rows = []
     for s in args.splits:
+        # Support {N} placeholder in train_csv path
+        tc = train_csv.replace('{N}', str(s)) if train_csv else None
         m = attack_split(
             split_idx        = s,
             submission_dir   = submission_dir,
@@ -441,6 +476,7 @@ def main():
             use_target_col   = args.use_target_col,
             ref_mode         = args.ref_mode,
             ref_csv          = ref_csv,
+            train_csv        = tc,
         )
         if m is not None:
             rows.append({'split': s, **m})
@@ -455,9 +491,11 @@ def main():
         hdr_metrics = ['AUC','MA','acc_best','f1_best',
                        'TPR@FPR=0.01','TPR@FPR=0.1','PR_AUC','Precision@5pct']
         print(f"\n{'='*80}")
-        marginals = f"2-way({label_col})" if args.use_target_col else "1-way"
-        ref_desc  = os.path.basename(ref_csv) if ref_csv else args.ref_mode
-        print(f"Summary  ({dataset}  |  ε={eps}  |  bins={args.n_bins}  |  {marginals}  |  ref={ref_desc})")
+        marginals  = f"2-way({label_col})" if args.use_target_col else "1-way"
+        ref_desc   = os.path.basename(ref_csv)   if ref_csv   else args.ref_mode
+        synth_desc = os.path.basename(train_csv) if train_csv else "synth"
+        print(f"Summary  ({dataset}  |  ε={eps}  |  bins={args.n_bins}  |  "
+              f"{marginals}  |  P_synth={synth_desc}  |  P_ref={ref_desc})")
         print(f"{'='*80}")
         header = f"  {'Split':>6}" + "".join(f"  {m:>14}" for m in hdr_metrics)
         print(header)
