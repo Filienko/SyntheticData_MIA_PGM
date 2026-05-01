@@ -21,23 +21,12 @@ because:
 
 import sys
 import numpy as np
-from scipy import sparse
-from scipy.optimize import bisect
+from scipy import optimize, sparse
 
-# Use the same mbi path that MST and PrivBayes already rely on.
 sys.path.insert(0, 'reprosyn-main/src/reprosyn/methods/mbi/')
 from mbi import Dataset, Domain, FactoredInference
 
-# Generator base from reprosyn (gives us encode_ordinal / decode_ordinal).
-sys.path.insert(1, 'reprosyn-main/src/reprosyn/')
-from generator import PipelineBase, encode_ordinal, decode_ordinal
-
-from scipy import optimize, sparse
-import numpy as np
-import sys
-
 from utils.rdp_accountant import compute_rdp, get_privacy_spent
-from mbi import Dataset, FactoredInference, Domain
 
 
 class Private_PGM:
@@ -130,12 +119,4 @@ class Private_PGM:
         self.model = engine.estimate(measurements, total=total, engine="MD")
 
     def generate(self, num_rows=None):
-        syn_df = self.model.synthetic_data(rows=num_rows).df
-        X_syn = syn_df.drop([self.target_variable], axis=1).values
-        y_syn = syn_df[self.target_variable].values
-        return np.concatenate([X_syn, np.expand_dims(y_syn, axis=1)], axis=1)
-
-    def postprocess(self):
-        synth_dataset, selected_cliques = self.output
-        self.cliques = selected_cliques
-        self.output = decode_ordinal(synth_dataset.df, self.encoders)
+        return self.model.synthetic_data(rows=num_rows).df

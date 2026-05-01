@@ -161,18 +161,16 @@ def run(input_csv:   str,
 
     # ---- Run Private-PGM -----------------------------------------------
     print(f"\n  Training Private-PGM …")
-    pgm_gen = pgm_module.PRIVATEPGM(
-        dataset          = df_disc[columns],
-        metadata         = meta,
-        size             = n_rows,
-        epsilon          = epsilon,
-        delta            = delta,
-        target_variable  = target_col,
-        num_iters        = num_iters,
+    domain_config = {m['name']: len(m['representation']) for m in meta}
+    pgm_gen = pgm_module.Private_PGM(
+        target_variable = target_col,
+        enable_privacy  = True,
+        target_epsilon  = epsilon,
+        target_delta    = delta,
     )
-    pgm_gen.run()
+    pgm_gen.train(df_disc[columns], domain_config, num_iters=num_iters)
 
-    synth_df = pgm_gen.output.copy()
+    synth_df = pgm_gen.generate(n_rows)
 
     # ---- Map gene bins back to original float space --------------------
     print("  Mapping gene bins → original float values (bin means) …")
