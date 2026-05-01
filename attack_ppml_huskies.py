@@ -200,6 +200,17 @@ def attack_split(
               "membership labels will not be available.")
         splits_yaml = None
 
+    # ---- Print resolved paths for verification ----------------------
+    print(f"  [paths] test_tsv  : {test_tsv}")
+    print(f"  [paths] sub_csv   : {sub_csv}")
+    print(f"  [paths] synth_csv : {synth_path}")
+    if os.path.exists(labels_path):
+        print(f"  [paths] labels_csv: {labels_path}")
+    else:
+        print(f"  [paths] labels_csv: (none — expecting label col in synth CSV)")
+    ref_tsv_exists = ref_tsv is not None and os.path.exists(ref_tsv)
+    print(f"  [paths] ref_tsv   : {ref_tsv}  (exists={ref_tsv_exists})")
+
     # ---- Load -------------------------------------------------------
     print("  Loading data …")
     targets = load_tsv_with_subtypes(test_tsv, sub_csv)
@@ -270,14 +281,31 @@ def attack_split(
         print(f"  WARNING: ~80% members in P_ref; use --ref-csv for a cleaner reference.")
         ref = targets.copy()
 
-    print(f"  Synth  : {synth.shape}")
-    print(f"  Ref    : {ref.shape}")
-    print(f"  Targets: {targets.shape}")
+    # ---- Spot-checks on loaded data ---------------------------------
+    first_gene = next((c for c in synth.columns if c.startswith('ENSG')), None)
+    synth_lbl_vc = synth[label_col].value_counts().to_dict() if label_col in synth.columns else {}
+    ref_lbl_vc   = ref[label_col].value_counts().to_dict()   if label_col in ref.columns   else {}
+
+    print(f"  Synth  : {synth.shape}  |  {label_col} dist: {synth_lbl_vc}")
+    if first_gene:
+        uniq = sorted(synth[first_gene].dropna().unique())
+        print(f"    first gene ({first_gene}): {len(uniq)} unique vals → {uniq[:8]}")
+    print(f"  Ref    : {ref.shape}  |  {label_col} dist: {ref_lbl_vc}")
+    if first_gene and first_gene in ref.columns:
+        ref_uniq = sorted(ref[first_gene].dropna().unique())
+        print(f"    first gene in ref: {len(ref_uniq)} unique vals, "
+              f"range [{ref[first_gene].min():.3f}, {ref[first_gene].max():.3f}]")
+    print(f"  Targets: {targets.shape}  |  index sample: {list(targets.index[:3])}")
 
     # ---- Membership labels ------------------------------------------
     membership = None
     if splits_yaml:
         membership = load_membership_from_yaml(splits_yaml, split_idx, targets.index)
+        n_mem  = int(membership.sum())
+        n_non  = len(membership) - n_mem
+        print(f"  Membership labels: {n_mem} members / {n_non} non-members "
+              f"(out of {len(membership)} candidates)  "
+              f"[from {os.path.basename(splits_yaml)}]")
 
     # ---- Align gene columns -----------------------------------------
     ensg_synth   = [c for c in synth.columns   if c.startswith('ENSG')]
