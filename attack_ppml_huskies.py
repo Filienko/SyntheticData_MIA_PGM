@@ -122,16 +122,20 @@ def attack_split(
     n_bins:            int,
     use_target_col:    bool,
     ref_mode:          str = 'auto',
+    ref_csv:           str = None,
 ) -> tuple:
     """Attack one split of the PPML-Huskies submission.
 
     Parameters
     ----------
     ref_mode : 'auto' | 'full'
-        'auto'  – priority: _reference.tsv > test_split_N.csv > full test TSV
-        'full'  – always use full test TSV as P_ref; required when 2-way
-                  (gene, subtype) marginals are desired, because test_split_N
-                  CSVs carry no subtype labels.
+        'auto'  – priority: _reference.tsv > test_split_N.csv > full test TSV.
+                  test_split_N.csv labels are joined from sub_csv when possible.
+        'full'  – force full test TSV as P_ref.
+    ref_csv  : str or None
+        If set, load this CSV directly as P_ref (overrides ref_mode).
+        Must contain ENSG* gene columns; label_col optional (auto-joined from
+        sub_csv if the index/first column contains recognisable sample IDs).
 
     Returns metric dict, or None if labels are unavailable.
     """
@@ -186,46 +190,82 @@ def attack_split(
     targets = load_tsv_with_subtypes(test_tsv, sub_csv)
 
     # ---- Reference population selection --------------------------------
-    # ref_mode='full'  → always use full test TSV (members+non-members).
-    #                    Required for 2-way (gene, subtype) marginals because
-    #                    test_split_N.csv files carry no subtype labels.
-    #                    The joint P_ref(bin, subtype) is non-uniform even though
-    #                    P_ref(bin) is uniform, so 2-way marginals still give signal.
-    # ref_mode='auto'  → priority: _reference.tsv > test_split_N.csv > full TSV
+    # Priority (highest to lowest):
+    #  --ref-csv <path>   → load that CSV directly as P_ref
+    #  --ref-mode full    → full test TSV  (members+non-members, has subtype labels)
+    #  _reference.tsv     → dedicated held-out TSV (competition standard)
+    #  test_split_N.csv   → per-split non-member CSV (auto Subtype join attempted)
+    #  full test TSV      → last resort (warns about member contamination)
     test_split_csv = os.path.join(submission_dir, f'test_split_{split_idx}.csv')
 
-    if ref_mode == 'full':
+    def _try_join_subtype(df: pd.DataFrame) -> pd.DataFrame:
+        """Attempt to join label_col from sub_csv onto df using its index."""
+        if label_col in df.columns and not (df[label_col] == 'Unknown').all():
+            return df          # already has labels
+        sub = pd.read_csv(sub_csv, index_col=0)
+        if 'samplesID' in sub.columns:
+            sub = sub.set_index('samplesID')
+        # find which column in sub has the label
+        lbl_src = label_col if label_col in sub.columns else None
+        if lbl_src is None:
+            # try first non-index column
+            lbl_src = sub.columns[0]
+        joined = df.join(sub[[lbl_src]].rename(columns={lbl_src: label_col}),
+                         how='left')
+        n_joined = joined[label_col].notna().sum()
+        joined[label_col] = joined[label_col].fillna('Unknown')
+        if n_joined > 0:
+            print(f"  Subtype join: {n_joined}/{len(df)} samples matched "
+                  f"in {os.path.basename(sub_csv)}")
+        else:
+            print(f"  Subtype join: no sample IDs matched sub_csv "
+                  f"(index mismatch) — '{label_col}' left as 'Unknown'")
+        return joined
+
+    if ref_csv:
+        ref = pd.read_csv(ref_csv, index_col=0)
+        ref = _try_join_subtype(ref)
+        n_mem_frac = ''
+        print(f"  --ref-csv → P_ref = {os.path.basename(ref_csv)}  "
+              f"(n={ref.shape[0]}, '{label_col}' known: "
+              f"{(ref[label_col] != 'Unknown').sum()})")
+        if target_col and (ref[label_col] == 'Unknown').all():
+            print(f"  Warning: ref_csv has no '{label_col}' labels — "
+                  f"2-way marginals degraded.")
+    elif ref_mode == 'full':
         ref = targets.copy()
-        print(f"  ref_mode=full → P_ref = full test TSV "
-              f"(members+non-members, n={ref.shape[0]}, has '{label_col}' labels)")
-        if not target_col:
-            print(f"  Note: full test TSV as P_ref with 1-way only — "
-                  f"1-way P_ref will be uniform (equal-depth on targets). "
-                  f"Consider --use-target-col for non-trivial 2-way signal.")
+        n_members = int(targets.index.isin(
+            set(pd.read_csv(splits_yaml and splits_yaml or '', nrows=0).columns)
+        )) if False else '?'   # approximate; just warn
+        print(f"  ref_mode=full → P_ref = full test TSV  "
+              f"(n={ref.shape[0]}, has '{label_col}' labels).")
+        print(f"  NOTE: full test TSV contains training members (~80%); "
+              f"1-way LR will collapse. Only 2-way (gene,subtype) terms give signal.")
     elif ref_tsv:
         ref = load_tsv_with_subtypes(ref_tsv, sub_csv)
         ref_has_label = (label_col in ref.columns and
                          not (ref[label_col] == 'Unknown').all())
         if target_col and not ref_has_label:
             print(f"  Reference TSV has no '{label_col}' labels and 2-way marginals "
-                  f"were requested → using test TSV as P_aux.")
+                  f"were requested → falling back to full test TSV as P_aux.")
             ref = targets.copy()
         elif not ref_has_label:
             print(f"  Note: reference TSV has no '{label_col}' labels "
-                  f"(OK — using it for 1-way gene marginals only).")
+                  f"(OK — 1-way gene marginals only).")
     elif os.path.exists(test_split_csv):
-        ref_raw = pd.read_csv(test_split_csv)
-        if label_col not in ref_raw.columns:
-            ref_raw[label_col] = 'Unknown'
+        ref_raw = pd.read_csv(test_split_csv, index_col=0)
+        ref_raw = _try_join_subtype(ref_raw)
         ref = ref_raw
-        print(f"  No _reference.tsv → using non-member split: "
-              f"{os.path.basename(test_split_csv)}  ({ref.shape[0]} samples)")
-        if target_col and (ref[label_col] == 'Unknown').all():
-            print(f"  Warning: test_split CSV has no '{label_col}' labels — "
-                  f"2-way marginals will be degraded. Use --ref-mode full instead.")
+        has_lbl = (ref[label_col] != 'Unknown').sum()
+        print(f"  No _reference.tsv → non-member split: "
+              f"{os.path.basename(test_split_csv)}  "
+              f"(n={ref.shape[0]}, '{label_col}' known: {has_lbl})")
+        if target_col and has_lbl == 0:
+            print(f"  Warning: no subtype labels in P_ref — "
+                  f"2-way marginals degraded. Try --ref-csv data/tcga_brca_full.csv.")
     else:
-        print(f"  No reference TSV or test_split CSV found → using full test TSV as P_aux.")
-        print(f"  WARNING: with 1-way only, LR signal may collapse (P_ref forced uniform).")
+        print(f"  No reference source found → full test TSV as P_aux (last resort).")
+        print(f"  WARNING: ~80% members in P_ref; use --ref-csv for a cleaner reference.")
         ref = targets.copy()
 
     print(f"  Synth  : {synth.shape}")
@@ -346,8 +386,17 @@ def main():
         '--ref-mode', choices=['auto', 'full'], default='auto',
         help=(
             "'auto': use _reference.tsv > test_split_N.csv > full test TSV. "
-            "'full': always use the full test TSV (members+non-members) as P_ref. "
-            "Required with --use-target-col when test_split CSVs have no subtype labels."
+            "'full': always use the full test TSV (members+non-members) as P_ref."
+        ),
+    )
+    parser.add_argument(
+        '--ref-csv', default=None,
+        help=(
+            'Path to a CSV file to use directly as P_ref (overrides --ref-mode). '
+            'Must have ENSG* gene columns as column headers and sample IDs as the '
+            'index (row 0 = header, col 0 = sample ID). Subtype labels are '
+            'auto-joined from sub_csv if not already present. '
+            'Example: --ref-csv data/tcga_brca_full.csv'
         ),
     )
     args = parser.parse_args()
@@ -373,7 +422,11 @@ def main():
     print(f"  Iterations: {iters}")
     print(f"  n_bins    : {args.n_bins}  (Blue Team hardcodes 4 bins)")
     print(f"  2-way marginals: {'yes, with ' + label_col if args.use_target_col else 'no (1-way only)'}")
-    print(f"  ref_mode  : {args.ref_mode}")
+    ref_csv = os.path.expanduser(args.ref_csv) if args.ref_csv else None
+    print(f"  ref_mode  : {args.ref_mode}"
+          + (f"  (overridden by --ref-csv {os.path.basename(ref_csv)})" if ref_csv else ""))
+    if ref_csv:
+        print(f"  ref_csv   : {ref_csv}")
 
     # ---- Attack each split ------------------------------------------
     rows = []
@@ -387,6 +440,7 @@ def main():
             n_bins           = args.n_bins,
             use_target_col   = args.use_target_col,
             ref_mode         = args.ref_mode,
+            ref_csv          = ref_csv,
         )
         if m is not None:
             rows.append({'split': s, **m})
@@ -402,7 +456,8 @@ def main():
                        'TPR@FPR=0.01','TPR@FPR=0.1','PR_AUC','Precision@5pct']
         print(f"\n{'='*80}")
         marginals = f"2-way({label_col})" if args.use_target_col else "1-way"
-        print(f"Summary  ({dataset}  |  ε={eps}  |  bins={args.n_bins}  |  {marginals}  |  ref={args.ref_mode})")
+        ref_desc  = os.path.basename(ref_csv) if ref_csv else args.ref_mode
+        print(f"Summary  ({dataset}  |  ε={eps}  |  bins={args.n_bins}  |  {marginals}  |  ref={ref_desc})")
         print(f"{'='*80}")
         header = f"  {'Split':>6}" + "".join(f"  {m:>14}" for m in hdr_metrics)
         print(header)
