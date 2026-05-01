@@ -146,22 +146,24 @@ def attack_split(
     output_dir:        str,
     n_bins:            int,
     use_target_col:    bool,
-    ref_mode:          str = 'auto',
-    ref_csv:           str = None,
-    train_csv:         str = None,
+    ref_mode:          str   = 'auto',
+    ref_csv:           str   = None,
+    train_csv:         str   = None,
+    decontaminate:     bool  = False,
+    member_frac:       float = None,
 ) -> tuple:
     """Attack one split of the PPML-Huskies submission.
 
     Parameters
     ----------
-    ref_mode  : 'auto' | 'full'
-    ref_csv   : override P_ref with this CSV (auto Subtype join attempted).
-    train_csv : override P_synth with this CSV (the actual training split,
-                e.g. train_split_N.csv).  Bypasses DP-noised synthetic data.
-                The training distribution is NOT forced to be uniform, so
-                2-way (gene, Subtype) marginals give genuine LR signal even
-                when using a contaminated or full-pool P_ref.
-                Subtype labels are auto-joined from sub_csv.
+    ref_mode      : 'auto' | 'full'
+    ref_csv       : override P_ref with this CSV (auto Subtype join attempted).
+    train_csv     : override P_synth with this CSV (bypasses DP synthetic data).
+    decontaminate : algebraically remove the member contribution from P_ref:
+                    P_nonmem = (P_pool − α·P_synth) / (1−α).
+                    Intended for use with --ref-csv (whole population pool).
+                    α is computed as N_synth/N_ref unless --member-frac is set.
+    member_frac   : explicit α (0 < α < 1).  If None, auto-computed.
 
     Returns metric dict, or None if labels are unavailable.
     """
@@ -322,7 +324,9 @@ def attack_split(
     # ---- Focal points + scores -------------------------------------
     fps    = build_focal_points(gene_cols, target_col if target_col else None)
     scores = mama_mia_score(synth_enc, ref_enc, targets_enc, fps,
-                            membership=membership)
+                            membership=membership,
+                            decontaminate=decontaminate,
+                            alpha=member_frac)
 
     # ---- Save predictions ------------------------------------------
     os.makedirs(output_dir, exist_ok=True)
@@ -415,15 +419,21 @@ def main():
         ),
     )
     parser.add_argument(
-        '--train-csv', default=None,
+        '--decontaminate', action='store_true', default=False,
         help=(
-            'Path to a CSV with actual training-split gene expression '
-            '(e.g. train_split_N.csv inside the submission dir). '
-            'When set, this replaces the DP-noised synthetic data as P_synth. '
-            'The joint (gene, Subtype) distribution is NOT forced to be uniform, '
-            'giving genuine 2-way marginal signal even with a contaminated P_ref. '
-            'Use with --use-target-col. '
-            'Supports {N} placeholder: --train-csv submission/.../train_split_{N}.csv'
+            'Estimate the non-member distribution by subtracting the member '
+            'contribution from P_ref:  P_nonmem = (P_pool − α·P_synth)/(1−α). '
+            'Intended for use with --ref-csv <whole-population-pool.csv> where '
+            'the pool contains both members and non-members. '
+            'α is auto-computed as N_synth/N_ref; override with --member-frac.'
+        ),
+    )
+    parser.add_argument(
+        '--member-frac', type=float, default=None,
+        help=(
+            'Explicit fraction of members in P_ref (α, between 0 and 1). '
+            'Auto-computed as N_synth/N_ref when not set. '
+            'Only used with --decontaminate.'
         ),
     )
     args = parser.parse_args()
@@ -455,11 +465,12 @@ def main():
           + (f"  (overridden by --ref-csv {os.path.basename(ref_csv)})" if ref_csv else ""))
     if ref_csv:
         print(f"  ref_csv   : {ref_csv}")
-    if train_csv:
-        print(f"  train_csv : {train_csv}  (replaces synthetic data as P_synth)")
-        if not args.use_target_col:
-            print(f"  NOTE: --train-csv is most useful with --use-target-col "
-                  f"(1-way marginals from train data are also uniform by equal-depth design).")
+    if args.decontaminate:
+        a_str = f"{args.member_frac:.3f}" if args.member_frac else "N_synth/N_ref (auto)"
+        print(f"  decontaminate: ON  α={a_str}")
+        if not ref_csv:
+            print(f"  NOTE: --decontaminate is most useful with --ref-csv <pool.csv> "
+                  f"where the pool contains members + non-members.")
 
     # ---- Attack each split ------------------------------------------
     rows = []
@@ -477,6 +488,8 @@ def main():
             ref_mode         = args.ref_mode,
             ref_csv          = ref_csv,
             train_csv        = tc,
+            decontaminate    = args.decontaminate,
+            member_frac      = args.member_frac,
         )
         if m is not None:
             rows.append({'split': s, **m})
@@ -494,8 +507,9 @@ def main():
         marginals  = f"2-way({label_col})" if args.use_target_col else "1-way"
         ref_desc   = os.path.basename(ref_csv)   if ref_csv   else args.ref_mode
         synth_desc = os.path.basename(train_csv) if train_csv else "synth"
+        decon_desc = f"+decontam(α={args.member_frac or 'auto'})" if args.decontaminate else ""
         print(f"Summary  ({dataset}  |  ε={eps}  |  bins={args.n_bins}  |  "
-              f"{marginals}  |  P_synth={synth_desc}  |  P_ref={ref_desc})")
+              f"{marginals}  |  P_synth={synth_desc}  |  P_ref={ref_desc}{decon_desc})")
         print(f"{'='*80}")
         header = f"  {'Split':>6}" + "".join(f"  {m:>14}" for m in hdr_metrics)
         print(header)

@@ -312,15 +312,37 @@ def build_focal_points(gene_cols, target_col=None):
 
 
 def mama_mia_score(synth_enc, ref_enc, targets_enc, focal_points,
-                   membership=None):
+                   membership=None, decontaminate=False, alpha=None):
     """Likelihood-ratio score for each target row.
 
     Parameters
     ----------
-    membership : np.ndarray of int (0/1), optional
-        If provided, prints per-group score statistics to help diagnose
-        whether the attack has any discriminative signal.
+    membership    : np.ndarray int (0/1), optional — enables per-group diagnostics.
+    decontaminate : bool
+        If True, estimate the non-member distribution by subtracting the
+        known member contribution from the (contaminated) pool reference:
+
+            P_nonmember = (P_pool − α × P_synth) / (1 − α)
+
+        α = N_synth / N_ref if not supplied.  Useful when P_ref is the full
+        population pool (members + non-members); decontamination algebraically
+        extracts the non-member marginal without needing a clean held-out set.
+        Works best for 2-way (gene, Subtype) cliques where P_synth is genuinely
+        non-uniform.
+    alpha : float, optional
+        Fraction of members in P_ref (0 < α < 1).  Auto-computed as
+        N_synth / N_ref when None.
     """
+    if decontaminate and alpha is None:
+        alpha = len(synth_enc) / len(ref_enc)
+        print(f"  Decontamination: α = {alpha:.4f}  "
+              f"(N_synth={len(synth_enc)} / N_ref={len(ref_enc)})")
+        if alpha >= 0.9:
+            print(f"  WARNING: α ≥ 0.9 — decontamination will heavily amplify noise. "
+                  f"Use a larger/more independent pool with --ref-csv.")
+        elif alpha >= 0.5:
+            print(f"  NOTE: α ≥ 0.5 — moderate amplification; prefer a larger pool.")
+
     n = len(targets_enc)
     A = np.zeros(n)
     W = np.zeros(n)
@@ -335,7 +357,20 @@ def mama_mia_score(synth_enc, ref_enc, targets_enc, focal_points,
             continue
 
         D_synth = synth_enc[cols].value_counts(normalize=True)
-        D_ref   = ref_enc[cols].value_counts(normalize=True)
+        D_pool  = ref_enc[cols].value_counts(normalize=True)
+
+        if decontaminate:
+            # Estimate non-member marginal by subtracting member contribution.
+            # Both D_synth and D_pool are pandas Series with tuple keys.
+            idx     = D_synth.index.union(D_pool.index)
+            p_pool  = D_pool.reindex(idx, fill_value=0.0)
+            p_syn   = D_synth.reindex(idx, fill_value=0.0)
+            p_nonm  = (p_pool - alpha * p_syn) / (1.0 - alpha)
+            p_nonm  = p_nonm.clip(lower=eps)
+            p_nonm /= p_nonm.sum()          # renormalise
+            D_ref   = p_nonm
+        else:
+            D_ref = D_pool
 
         vals = targets_enc[cols].values
         for i, row in enumerate(vals):
