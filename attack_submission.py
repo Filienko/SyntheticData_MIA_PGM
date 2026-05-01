@@ -205,36 +205,60 @@ def encode_all(synth, ref, targets, gene_cols, n_bins, name='attack'):
        e.g. PRO-GENE-GEN PGM output).  Each gene column has exactly n_bins
        distinct float bin-representatives.
        - Synthetic : map unique float values → integer ranks 0..k-1
-       - Ref/test  : apply n_bins-quantile binning fitted on reference data
-         (matches PGM's alpha=0.25 quantile scheme; no StandardScaler)
+       - Ref/test  : quantile-bin fitted on TARGETS (large N, ~80% members,
+         better approximation of training-data boundaries than small ref).
+         Fitting on ref itself forces P_ref = exactly 1/k per bin, which
+         trivially kills the LR signal.
 
     B) Synthetic is continuous (e.g. our own run_tcga_pgm.py output).
        - StandardScale → equal-depth bin on synth+ref combined.
     """
     if _is_effectively_discrete(synth, gene_cols, max_unique=n_bins + 2):
-        print(f"  Synthetic data is already discretized "
-              f"(≤{n_bins+2} unique values/gene). "
-              f"Ordinal-encoding synth; quantile-binning ref/test with "
-              f"n_bins={n_bins} fitted on reference.")
+        synth_enc   = synth.copy()
+        ref_enc     = ref.copy()
+        targets_enc = targets.copy()
 
-        # -- Synthetic: rank-order the unique float values per column → 0..k-1
-        synth_enc = synth.copy()
+        _psyn_samples = {}   # for diagnostics: first 3 genes
+        _pref_devs    = []   # mean |P_ref_bin - uniform| per gene
+
         for col in gene_cols:
+            # -- Synth: rank-order unique values → 0..k-1
             sorted_vals = sorted(synth[col].unique())
+            k = len(sorted_vals)
             rank_map = {v: i for i, v in enumerate(sorted_vals)}
             synth_enc[col] = synth[col].map(rank_map).astype(int)
 
-        # -- Reference / targets: quantile binning fitted on reference only.
-        #    np.digitize with n_bins-1 interior boundaries gives bins 0..n_bins-1.
-        ref_enc     = ref.copy()
-        targets_enc = targets.copy()
-        for col in gene_cols:
+            # -- Ref / targets: boundaries fitted on TARGETS (not ref).
+            #    Targets has ~5x more samples → better boundary estimation.
+            #    Fitting on ref makes P_ref = exactly 1/k for each bin,
+            #    which collapses the LR to 1.0 everywhere.
             boundaries = np.quantile(
-                ref[col].dropna(),
-                np.linspace(0, 1, n_bins + 1)[1:-1],   # n_bins-1 interior quantiles
+                targets[col].dropna(),
+                np.linspace(0, 1, k + 1)[1:-1],
             )
             ref_enc[col]     = np.digitize(ref[col],     boundaries).astype(int)
             targets_enc[col] = np.digitize(targets[col], boundaries).astype(int)
+
+            # Diagnostics
+            if len(_psyn_samples) < 3:
+                _psyn_samples[col] = dict(
+                    synth_enc[col].value_counts(normalize=True).sort_index()
+                )
+            p_ref_dist = ref_enc[col].value_counts(normalize=True)
+            uniform    = 1.0 / k
+            _pref_devs.append(float(np.mean(np.abs(p_ref_dist.values - uniform))))
+
+        # -- Print encoding diagnostics --
+        print(f"  Synthetic data is already discretized (≤{n_bins+2} unique vals/gene).")
+        print(f"  Encoding: ordinal-encode synth; quantile-bin ref+test on targets (n={len(targets)}).")
+        print(f"  P_synth sample (should deviate from uniform={1/n_bins:.3f} for signal):")
+        for col, dist in _psyn_samples.items():
+            vals = list(dist.values())
+            deviation = np.std(vals)
+            print(f"    {col[:20]}: { {k: f'{v:.3f}' for k,v in dist.items()} }  σ={deviation:.4f}")
+        mean_pref_dev = float(np.mean(_pref_devs))
+        print(f"  P_ref mean |dev from uniform|: {mean_pref_dev:.4f}  "
+              f"({'~no signal' if mean_pref_dev < 0.01 else 'some signal'} from encoding)")
 
         return synth_enc, ref_enc, targets_enc
 
@@ -287,8 +311,16 @@ def build_focal_points(gene_cols, target_col=None):
     return fps
 
 
-def mama_mia_score(synth_enc, ref_enc, targets_enc, focal_points):
-    """Likelihood-ratio score for each target row."""
+def mama_mia_score(synth_enc, ref_enc, targets_enc, focal_points,
+                   membership=None):
+    """Likelihood-ratio score for each target row.
+
+    Parameters
+    ----------
+    membership : np.ndarray of int (0/1), optional
+        If provided, prints per-group score statistics to help diagnose
+        whether the attack has any discriminative signal.
+    """
     n = len(targets_enc)
     A = np.zeros(n)
     W = np.zeros(n)
@@ -313,7 +345,23 @@ def mama_mia_score(synth_enc, ref_enc, targets_enc, focal_points):
             A[i] += weight * (p_s / p_r)
             W[i] += weight
 
-    return A / np.maximum(W, 1.0)
+    scores = A / np.maximum(W, 1.0)
+
+    if membership is not None:
+        mem  = membership.astype(bool)
+        s_m  = scores[mem]
+        s_nm = scores[~mem]
+        print(f"  [score diag] members  ({mem.sum():4d}): "
+              f"mean={s_m.mean():.6f}  std={s_m.std():.6f}  "
+              f"range=[{s_m.min():.4f}, {s_m.max():.4f}]")
+        print(f"  [score diag] non-mem  ({(~mem).sum():4d}): "
+              f"mean={s_nm.mean():.6f}  std={s_nm.std():.6f}  "
+              f"range=[{s_nm.min():.4f}, {s_nm.max():.4f}]")
+        delta = s_m.mean() - s_nm.mean()
+        print(f"  [score diag] Δ mean (mem−non): {delta:+.6f}  "
+              f"({'positive = correct direction' if delta > 0 else 'NEGATIVE = wrong direction'})")
+
+    return scores
 
 
 def _tpr_at_fpr(labels, scores, fpr_target=0.1):

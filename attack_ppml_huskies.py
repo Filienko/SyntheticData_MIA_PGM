@@ -247,7 +247,8 @@ def attack_split(
 
     # ---- Focal points + scores -------------------------------------
     fps    = build_focal_points(gene_cols, target_col if target_col else None)
-    scores = mama_mia_score(synth_enc, ref_enc, targets_enc, fps)
+    scores = mama_mia_score(synth_enc, ref_enc, targets_enc, fps,
+                            membership=membership)
 
     # ---- Save predictions ------------------------------------------
     os.makedirs(output_dir, exist_ok=True)
