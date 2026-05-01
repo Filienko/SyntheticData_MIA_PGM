@@ -16,20 +16,20 @@ Parameters extracted automatically from Blue Team config
 Usage
 -----
     # TCGA-COMBINED (all 5 splits):
-    python3 attack_ppml_huskies.py \\
-        --submission-dir /path/to/blueteam_PPML-Huskies_TCGA-COMBINED \\
-        --competition-home ~/Health-Privacy-Challenge \\
+    python3 attack_ppml_huskies.py \
+        --submission-dir /path/to/blueteam_PPML-Huskies_TCGA-COMBINED \
+        --competition-home ~/Health-Privacy-Challenge \
         --output-dir results/ppml_huskies_combined
 
     # TCGA-BRCA:
-    python3 attack_ppml_huskies.py \\
-        --submission-dir /path/to/blueteam_PPML-Huskies_TCGA-BRCA \\
-        --competition-home ~/Health-Privacy-Challenge \\
+    python3 attack_ppml_huskies.py \
+        --submission-dir /path/to/blueteam_PPML-Huskies_TCGA-BRCA \
+        --competition-home ~/Health-Privacy-Challenge \
         --output-dir results/ppml_huskies_brca
 
     # Override n-bins or add 2-way marginals:
-    python3 attack_ppml_huskies.py \\
-        --submission-dir ... --competition-home ... \\
+    python3 attack_ppml_huskies.py \
+        --submission-dir ... --competition-home ... \
         --n-bins 4 --use-target-col
 
 Output
@@ -148,7 +148,6 @@ def attack_split(
     use_target_col:    bool,
     ref_mode:          str   = 'auto',
     ref_csv:           str   = None,
-    train_csv:         str   = None,
     decontaminate:     bool  = False,
     member_frac:       float = None,
 ) -> tuple:
@@ -158,7 +157,6 @@ def attack_split(
     ----------
     ref_mode      : 'auto' | 'full'
     ref_csv       : override P_ref with this CSV (auto Subtype join attempted).
-    train_csv     : override P_synth with this CSV (bypasses DP synthetic data).
     decontaminate : algebraically remove the member contribution from P_ref:
                     P_nonmem = (P_pool − α·P_synth) / (1−α).
                     Intended for use with --ref-csv (whole population pool).
@@ -173,10 +171,10 @@ def attack_split(
 
     # ---- Extract parameters from Blue Team config -------------------
     ds_cfg      = blue_cfg['dataset_config']
-    dataset     = ds_cfg['name']                    # TCGA-BRCA or TCGA-COMBINED
-    label_col   = ds_cfg['subtype_col_name']        # "Subtype" or "cancer_type"
-    count_rel   = ds_cfg['count_file']              # relative path to TSV
-    annot_rel   = ds_cfg['annot_file']              # relative path to subtypes CSV
+    dataset     = ds_cfg['name']                     # TCGA-BRCA or TCGA-COMBINED
+    label_col   = ds_cfg['subtype_col_name']         # "Subtype" or "cancer_type"
+    count_rel   = ds_cfg['count_file']               # relative path to TSV
+    annot_rel   = ds_cfg['annot_file']               # relative path to subtypes CSV
 
     target_col  = label_col if use_target_col else None
 
@@ -206,17 +204,7 @@ def attack_split(
     print("  Loading data …")
     targets = load_tsv_with_subtypes(test_tsv, sub_csv)
 
-    if train_csv:
-        # Use actual training split directly as P_synth proxy.
-        # This bypasses DP noise; the joint (gene, Subtype) distribution is
-        # the real training distribution and is NOT forced to be uniform.
-        synth_raw = pd.read_csv(train_csv, index_col=0)
-        synth_raw = _try_join_subtype_early(synth_raw, sub_csv, label_col)
-        synth = synth_raw
-        print(f"  P_synth = train_csv: {os.path.basename(train_csv)}  "
-              f"(n={synth.shape[0]}, '{label_col}' known: "
-              f"{(synth[label_col] != 'Unknown').sum() if label_col in synth.columns else 0})")
-    elif os.path.exists(labels_path):
+    if os.path.exists(labels_path):
         synth = load_synth_with_labels(synth_path, labels_path, label_col)
     else:
         synth = pd.read_csv(synth_path)
@@ -243,7 +231,6 @@ def attack_split(
     if ref_csv:
         ref = pd.read_csv(ref_csv, index_col=0)
         ref = _try_join_subtype(ref)
-        n_mem_frac = ''
         print(f"  --ref-csv → P_ref = {os.path.basename(ref_csv)}  "
               f"(n={ref.shape[0]}, '{label_col}' known: "
               f"{(ref[label_col] != 'Unknown').sum()})")
@@ -252,9 +239,6 @@ def attack_split(
                   f"2-way marginals degraded.")
     elif ref_mode == 'full':
         ref = targets.copy()
-        n_members = int(targets.index.isin(
-            set(pd.read_csv(splits_yaml and splits_yaml or '', nrows=0).columns)
-        )) if False else '?'   # approximate; just warn
         print(f"  ref_mode=full → P_ref = full test TSV  "
               f"(n={ref.shape[0]}, has '{label_col}' labels).")
         print(f"  NOTE: full test TSV contains training members (~80%); "
@@ -459,10 +443,11 @@ def main():
     print(f"  Iterations: {iters}")
     print(f"  n_bins    : {args.n_bins}  (Blue Team hardcodes 4 bins)")
     print(f"  2-way marginals: {'yes, with ' + label_col if args.use_target_col else 'no (1-way only)'}")
+    
     ref_csv   = os.path.expanduser(args.ref_csv)   if args.ref_csv   else None
-    train_csv = os.path.expanduser(args.train_csv) if args.train_csv else None
     print(f"  ref_mode  : {args.ref_mode}"
           + (f"  (overridden by --ref-csv {os.path.basename(ref_csv)})" if ref_csv else ""))
+    
     if ref_csv:
         print(f"  ref_csv   : {ref_csv}")
     if args.decontaminate:
@@ -475,8 +460,6 @@ def main():
     # ---- Attack each split ------------------------------------------
     rows = []
     for s in args.splits:
-        # Support {N} placeholder in train_csv path
-        tc = train_csv.replace('{N}', str(s)) if train_csv else None
         m = attack_split(
             split_idx        = s,
             submission_dir   = submission_dir,
@@ -487,7 +470,6 @@ def main():
             use_target_col   = args.use_target_col,
             ref_mode         = args.ref_mode,
             ref_csv          = ref_csv,
-            train_csv        = tc,
             decontaminate    = args.decontaminate,
             member_frac      = args.member_frac,
         )
@@ -506,10 +488,11 @@ def main():
         print(f"\n{'='*80}")
         marginals  = f"2-way({label_col})" if args.use_target_col else "1-way"
         ref_desc   = os.path.basename(ref_csv)   if ref_csv   else args.ref_mode
-        synth_desc = os.path.basename(train_csv) if train_csv else "synth"
         decon_desc = f"+decontam(α={args.member_frac or 'auto'})" if args.decontaminate else ""
+        
+        # Hardcoded synth description since training data was removed
         print(f"Summary  ({dataset}  |  ε={eps}  |  bins={args.n_bins}  |  "
-              f"{marginals}  |  P_synth={synth_desc}  |  P_ref={ref_desc}{decon_desc})")
+              f"{marginals}  |  P_synth=synth  |  P_ref={ref_desc}{decon_desc})")
         print(f"{'='*80}")
         header = f"  {'Split':>6}" + "".join(f"  {m:>14}" for m in hdr_metrics)
         print(header)
