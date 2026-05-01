@@ -32,207 +32,108 @@ from mbi import Dataset, Domain, FactoredInference
 sys.path.insert(1, 'reprosyn-main/src/reprosyn/')
 from generator import PipelineBase, encode_ordinal, decode_ordinal
 
+from scipy import optimize, sparse
+import numpy as np
+import sys
 
-# ---------------------------------------------------------------------------
-# Noise calibration — exact port of model.py's moments_calibration.
-# ---------------------------------------------------------------------------
-
-def _calibrate_sigma(epsilon, delta):
-    """Return Gaussian noise sigma so the TWO-round query is (eps, delta)-DP.
-
-    Direct port of the reference's moments_calibration(round1=1, round2=1, eps, delta).
-
-    The reference numerically bisects sigma such that composing two Gaussian
-    mechanisms (each with sensitivity 1 and noise sigma) satisfies (eps, delta)-DP
-    under the standard Mironov 2017 RDP accountant:
-
-        rdp_total(alpha) = 2 * alpha / (2 * sigma^2) = alpha / sigma^2
-        eps(alpha)       = rdp_total(alpha) + log(1/delta) / (alpha - 1)
-        eps_final        = min_{alpha in 2..4095} eps(alpha)
-
-    The reference's obj(sigma) = eps_final - eps + 1e-8, bisected to zero.
-    """
-    if delta <= 0:
-        return None  # pure DP / Laplace handled separately in privatepgm()
-
-    orders = range(2, 4096)
-
-    def obj(sigma):
-        # Gaussian RDP for two rounds: rdp(alpha) = alpha / sigma^2
-        # Mironov conversion: eps(alpha) = rdp(alpha) + log(1/delta) / (alpha - 1)
-        eps_rdp = min(
-            a / sigma**2 + np.log(1.0 / delta) / (a - 1)
-            for a in orders
-        )
-        return eps_rdp - epsilon + 1e-8
-
-    low = 1.0
-    high = 1.0
-    while obj(low) < 0:
-        low /= 2.0
-    while obj(high) > 0:
-        high *= 2.0
-    sigma = bisect(obj, low, high)
-    # assert obj(sigma) - 1e-8 <= 0, "not differentially private"
-    return sigma
+from utils.rdp_accountant import compute_rdp, get_privacy_spent
+from mbi import Dataset, FactoredInference, Domain
 
 
-# ---------------------------------------------------------------------------
-# Core training / synthesis function.
-# ---------------------------------------------------------------------------
+class Private_PGM:
+    def __init__(self, target_variable, enable_privacy, target_epsilon, target_delta):
+        self.target_epsilon = target_epsilon
+        self.enable_privacy = enable_privacy
+        self.target_delta = target_delta
+        self.target_variable = target_variable
+        self.model = None
 
-def privatepgm(data, cliques, epsilon, delta, rows, num_iters=1000):
-    """Train Private-PGM with fixed marginals and return synthetic data.
+    @staticmethod
+    def moments_calibration(round1, round2, eps, delta):
 
-    Parameters
-    ----------
-    data      : mbi.Dataset (ordinal-encoded)
-    cliques   : list of 2-way clique tuples, e.g. [('age', 'income'), ...]
-                These are the (col, target_variable) pairs.
-    epsilon   : privacy budget
-    delta     : delta parameter (use 0 for pure DP / Laplace noise)
-    rows      : number of synthetic rows to generate
-    num_iters : FactoredInference mirror-descent iterations (reference uses 10000)
+        orders = range(2, 4096)
 
-    Returns
-    -------
-    (synth_dataset, selected_cliques)
-        synth_dataset   : mbi.Dataset of synthetic records
-        selected_cliques: list of tuples – the cliques actually measured
-                          (1-way union 2-way); these become the focal points.
-    """
-    n = data.df.shape[0]
-    measurements = []
-    selected = []  # will collect every measured clique
+        def obj(sigma):
+            rdp1 = compute_rdp(1.0, sigma / round1, 1, orders)
+            rdp2 = compute_rdp(1.0, sigma / round2, 1, orders)
+            rdp = rdp1 + rdp2
+            privacy = get_privacy_spent(orders, rdp, delta=delta)
+            return privacy[0] - eps + 1e-8
 
-    if delta > 0:
-        sigma = _calibrate_sigma(epsilon, delta)
+        low = 1.0
+        high = 1.0
+        while obj(low) < 0:
+            low /= 2.0
+        while obj(high) > 0:
+            high *= 2.0
+        sigma = optimize.bisect(obj, low, high)
+        assert (
+            obj(sigma) - 1e-8 <= 0
+        ), "not differentially private"  # true eps <= requested eps
+        return sigma
 
-        # --- Round 1: all 1-way marginals ---
-        d1 = len(data.domain)
-        w1 = np.ones(d1) / np.sqrt(d1)   # L2-normalised weights (model.py)
+    def train(self, train_df, config, cliques=None, num_iters=10000):
+        domain = Domain(config.keys(), config.values())
+        data = Dataset(train_df, domain)
+        total = data.df.shape[0]
 
-        for col, wgt in zip(data.domain.attrs, w1):
-            x = data.project([col]).datavector()
+        if self.enable_privacy:
+            if self.target_delta > 0:
+                sigma = self.moments_calibration(
+                    1.0, 1.0, self.target_epsilon, self.target_delta
+                )
+            else:
+                sigma = 1.0 / len(data.domain) / 2.0
+        else:
+            sigma = 0.0
+        print("=" * 100)
+        print("sigma:", sigma)
+
+        weights = np.ones(len(data.domain))
+        weights /= np.linalg.norm(weights)  # now has L2 norm = 1
+
+        measurements = []
+        for col, wgt in zip(data.domain, weights):
+            x = data.project(col).datavector()
             I = sparse.eye(x.size)
-            y = wgt * x + sigma * np.random.randn(x.size)
-            # Store as (Q, noisy_marginal, effective_sigma, clique)
-            measurements.append((I, y / wgt, 1.0 / wgt, (col,)))
-            selected.append((col,))
+            if self.target_delta > 0:
+                y = wgt * x + sigma * np.random.randn(x.size)
+                measurements.append((I, y / wgt, 1.0 / wgt, (col,)))
+            else:
+                y = x + np.random.laplace(loc=0, scale=sigma, size=x.size)
+                measurements.append((I, y, sigma, (col,)))
 
-        # --- Round 2: all 2-way (col, target) marginals ---
-        d2 = len(cliques)
-        w2 = np.ones(d2) / np.sqrt(d2)
-
-        for cl, wgt in zip(cliques, w2):
-            x = data.project(cl).datavector()
-            I = sparse.eye(x.size)
-            y = wgt * x + sigma * np.random.randn(x.size)
-            measurements.append((I, y / wgt, 1.0 / wgt, cl))
-            selected.append(cl)
-
-    else:
-        # Pure DP (Laplace noise) – mirrors model.py's else branch.
-        d = len(data.domain)
-        sigma_1way = 1.0 / d / 2.0
-
-        for col in data.domain.attrs:
-            x = data.project([col]).datavector()
-            I = sparse.eye(x.size)
-            y = x + np.random.laplace(loc=0, scale=sigma_1way, size=x.size)
-            measurements.append((I, y, sigma_1way, (col,)))
-            selected.append((col,))
-
-        d2 = len(cliques)
-        sigma_2way = 1.0 / d2 / 2.0
-
-        for cl in cliques:
-            x = data.project(cl).datavector()
-            I = sparse.eye(x.size)
-            y = x + np.random.laplace(loc=0, scale=sigma_2way, size=x.size)
-            measurements.append((I, y, sigma_2way, cl))
-            selected.append(cl)
-
-    engine = FactoredInference(data.domain, log=True, iters=num_iters)
-    est = engine.estimate(measurements, total=n, engine="MD")
-    synth = est.synthetic_data(rows=rows)
-
-    # est.cliques gives the maximal cliques in the fitted graphical model
-    # (typically the 2-way ones, since they subsume the 1-way).
-    # We return `selected` instead so callers know *every* measured clique.
-    return synth, selected
-
-
-# ---------------------------------------------------------------------------
-# Reprosyn-style Pipeline wrapper (mirrors the MST class in mst.py).
-# ---------------------------------------------------------------------------
-
-def domain_from_metadata(metadata):
-    """Dict of {col_name: domain_size} from reprosyn metadata list."""
-    return {col["name"]: len(col["representation"]) for col in metadata}
-
-
-class PRIVATEPGM(PipelineBase):
-    """Generator class wrapping the Private-PGM mechanism.
-
-    Parameters
-    ----------
-    epsilon        : privacy budget
-    delta          : delta parameter  (default 1e-9)
-    target_variable: column treated as the classification target; all 2-way
-                     marginals are (col, target_variable) pairs.
-                     If None, defaults to the last column.
-    cliques        : explicit list of 2-way clique tuples to measure.
-                     If None, auto-constructed as all (col, target_variable).
-    num_iters      : FactoredInference iterations  (default 1000; reference uses 10000)
-    """
-
-    generator = staticmethod(privatepgm)
-
-    def __init__(self, epsilon=1.0, delta=1e-9,
-                 target_variable=None, cliques=None, num_iters=10000, **kw):
-        parameters = {
-            "epsilon": epsilon,
-            "delta": delta,
-            "target_variable": target_variable,
-            "cliques": cliques,
-            "num_iters": num_iters,
-        }
-        super().__init__(**kw, **parameters)
-
-    def preprocess(self):
-        self.encoded_dataset, self.encoders = encode_ordinal(self.dataset)
-        self.domain = domain_from_metadata(self.dataset.metadata)
-        self.encoded_dataset = Dataset(
-            self.encoded_dataset, Domain.fromdict(self.domain)
-        )
-
-    def generate(self):
-        target = self.params["target_variable"]
-        if target is None:
-            target = list(self.domain.keys())[-1]
-
-        cliques = self.params["cliques"]
+        # spend half of privacy budget to measure 2 way marginals with the target variable
         if cliques is None:
-            # Match reference order: (col, target) preserving domain iteration order.
-            # The reference uses [(col, target) for col in domain if col != target].
-            # sorted() was removed because it changed the clique tuple ordering
-            # vs. the reference, which doesn't sort.
-            cliques = [
-                (col, target)
-                for col in self.domain
-                if col != target
-            ]
+            cliques = []
+            for col in data.domain:
+                if col != self.target_variable:
+                    cliques.append((col, self.target_variable))
 
-        self.output = self.generator(
-            self.encoded_dataset,
-            cliques,
-            self.params["epsilon"],
-            self.params["delta"],
-            self.size,
-            self.params["num_iters"],
-        )
-        return self.output
+        weights = np.ones(len(cliques))
+        weights /= np.linalg.norm(weights)  # now has L2 norm = 1
+
+        if self.target_delta == 0:
+            sigma = 1.0 / len(cliques) / 2.0
+
+        for cl, wgt in zip(cliques, weights):
+            x = data.project(cl).datavector()
+            I = sparse.eye(x.size)
+            if self.target_delta > 0:
+                y = wgt * x + sigma * np.random.randn(x.size)
+                measurements.append((I, y / wgt, 1.0 / wgt, cl))
+            else:
+                y = x + np.random.laplace(loc=0, scale=sigma, size=x.size)
+                measurements.append((I, y, sigma, cl))
+
+        engine = FactoredInference(domain, log=True, iters=num_iters)
+        self.model = engine.estimate(measurements, total=total, engine="MD")
+
+    def generate(self, num_rows=None):
+        syn_df = self.model.synthetic_data(rows=num_rows).df
+        X_syn = syn_df.drop([self.target_variable], axis=1).values
+        y_syn = syn_df[self.target_variable].values
+        return np.concatenate([X_syn, np.expand_dims(y_syn, axis=1)], axis=1)
 
     def postprocess(self):
         synth_dataset, selected_cliques = self.output

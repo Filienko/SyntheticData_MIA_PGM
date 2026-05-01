@@ -376,9 +376,11 @@ def mama_mia_score(synth_enc, ref_enc, targets_enc, focal_points,
         for i, row in enumerate(vals):
             key = tuple(row)
             p_s = D_synth.get(key, default=eps)
-            p_r = D_ref.get(key,   default=eps)
-            A[i] += weight * (p_s / p_r)
-            W[i] += weight
+            #p_r = D_ref.get(key,   default=eps)
+            #A[i] += weight * (p_s / p_r)
+            #W[i] += weight
+            A[i] += weight * np.log(p_s) 
+            
 
     scores = A / np.maximum(W, 1.0)
 

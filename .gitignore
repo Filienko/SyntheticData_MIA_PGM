@@ -5,4 +5,7 @@ output.csv
 submission/*
 
 *.csv
-
+*.png
+*.pdf
+*.xy
+*.swp
