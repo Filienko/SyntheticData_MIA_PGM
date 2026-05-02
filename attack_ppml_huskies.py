@@ -184,8 +184,11 @@ def attack_split(
     sub_csv   = resolve_path(competition_home, annot_rel)
 
     # Reference TSV: look for a _reference.tsv sibling of count_file
+    # Only use auto-detected path if no explicit --ref-tsv was passed
     ref_tsv_candidate = test_tsv.replace('.tsv', '_reference.tsv')
-    ref_tsv = ref_tsv_candidate if os.path.exists(ref_tsv_candidate) else None
+    ref_tsv_auto = ref_tsv_candidate if os.path.exists(ref_tsv_candidate) else None
+    if ref_tsv is None:
+        ref_tsv = ref_tsv_auto
 
     # ---- Submission files -------------------------------------------
     synth_path  = os.path.join(submission_dir, f'synthetic_data_split_{split_idx}.csv')
