@@ -37,6 +37,8 @@ import os
 import argparse
 import warnings
 
+import shutil
+
 import numpy as np
 import pandas as pd
 import yaml
@@ -367,6 +369,24 @@ def write_splits(submission_dir: str, split: int, train_ids: list,
     return out
 
 
+def _copy_splits_yaml(src: str | None, submission_dir: str, target_col: str) -> bool:
+    """Copy an existing splits YAML into submission_dir with the expected name.
+
+    Returns True if the file was copied, False if src is None / not found.
+    """
+    if not src:
+        return False
+    src = os.path.expanduser(src)
+    if not os.path.exists(src):
+        print(f"  WARNING: --splits-yaml not found: {src}")
+        return False
+    dataset = _infer_dataset(target_col)
+    dst = os.path.join(submission_dir, f'{dataset}_splits.yaml')
+    shutil.copy2(src, dst)
+    print(f"  Copied splits YAML  → {dst}")
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run Private-PGM on a gene-expression CSV",
@@ -405,6 +425,10 @@ def main():
                         help='Path to the full gene-expression TSV (all candidate samples). '
                              'Used to derive test_index (non-members) in the splits YAML. '
                              'If omitted, splits YAML will contain train_index only.')
+    parser.add_argument('--splits-yaml', default=None,
+                        help='Path to existing splits YAML '
+                             '(e.g. PPML-H_data_splits/split_indices/TCGA-COMBINED_splits.yaml). '
+                             'Copied into the submission dir as <dataset>_splits.yaml.')
     args = parser.parse_args()
 
     output_csv = os.path.expanduser(args.output)
@@ -429,15 +453,7 @@ def main():
             synth_size = args.synth_size,
         )
         write_config(submission_dir, args.target_col, args.epsilon, args.num_iters)
-        # Splits YAML needs real sample IDs — only possible if test TSV is given
-        # (X_train in split-dir format has no row sample IDs, so we derive members
-        #  as the intersection of test-TSV IDs that match by position, which is
-        #  only meaningful when the TSV row order matches the training set).
-        # Most reliable: skip splits YAML here and use write_splits.py separately.
-        if args.test_tsv:
-            print("  NOTE: split-dir X_train has no sample IDs — "
-                  "splits YAML requires a separate run of write_splits.py "
-                  "with --train-csvs pointing to a CSV that has TCGA IDs as its index.")
+        _copy_splits_yaml(args.splits_yaml, submission_dir, args.target_col)
     else:
         df_loaded = pd.read_csv(os.path.expanduser(args.input))
         # Extract sample IDs if the first column is non-numeric (TCGA-xxx IDs)
@@ -457,13 +473,14 @@ def main():
             synth_size = args.synth_size,
         )
         write_config(submission_dir, args.target_col, args.epsilon, args.num_iters)
-        if args.split is not None:
-            if train_ids is None:
-                print("  NOTE: no string sample IDs found in input CSV — skipping splits YAML")
-            else:
-                write_splits(submission_dir, args.split, train_ids,
-                             os.path.expanduser(args.test_tsv) if args.test_tsv else None,
-                             args.target_col)
+        if not _copy_splits_yaml(args.splits_yaml, submission_dir, args.target_col):
+            if args.split is not None:
+                if train_ids is None:
+                    print("  NOTE: no string sample IDs found in input CSV — skipping splits YAML")
+                else:
+                    write_splits(submission_dir, args.split, train_ids,
+                                 os.path.expanduser(args.test_tsv) if args.test_tsv else None,
+                                 args.target_col)
 
 
 if __name__ == '__main__':
