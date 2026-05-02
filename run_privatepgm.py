@@ -296,15 +296,17 @@ def _infer_dataset(target_col: str) -> str:
 
 
 def write_config(submission_dir: str, target_col: str, epsilon: float,
-                 num_iters: int) -> str:
+                 num_iters: int,
+                 count_file: str | None = None,
+                 annot_file: str | None = None) -> str:
     dataset = _infer_dataset(target_col)
     d = _DATASET_DEFAULTS[dataset]
     cfg = {
         'dataset_config': {
             'name': dataset,
             'subtype_col_name': d['subtype_col_name'],
-            'count_file': d['count_file'],
-            'annot_file': d['annot_file'],
+            'count_file': count_file or d['count_file'],
+            'annot_file': annot_file or d['annot_file'],
         },
         'pgg_pgm_config': {
             'epsilon': epsilon,
@@ -315,6 +317,8 @@ def write_config(submission_dir: str, target_col: str, epsilon: float,
     with open(out, 'w') as f:
         yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
     print(f"  Wrote config        → {out}")
+    print(f"    count_file: {cfg['dataset_config']['count_file']}")
+    print(f"    annot_file: {cfg['dataset_config']['annot_file']}")
     return out
 
 
@@ -429,6 +433,14 @@ def main():
                         help='Path to existing splits YAML '
                              '(e.g. PPML-H_data_splits/split_indices/TCGA-COMBINED_splits.yaml). '
                              'Copied into the submission dir as <dataset>_splits.yaml.')
+    parser.add_argument('--count-file', default=None,
+                        help='Relative path (from --competition-home) to the gene-expression TSV. '
+                             'Written into config.yaml as dataset_config.count_file. '
+                             'Example: BLUE_TCGA-COMBINED/TCGA-COMBINED_primary_tumor_star_deseq_VST_lmgenes.tsv')
+    parser.add_argument('--annot-file', default=None,
+                        help='Relative path (from --competition-home) to the sample annotation CSV. '
+                             'Written into config.yaml as dataset_config.annot_file. '
+                             'Example: BLUE_TCGA-COMBINED/TCGA-COMBINED_primary_tumor_subtypes.csv')
     args = parser.parse_args()
 
     output_csv = os.path.expanduser(args.output)
@@ -452,7 +464,8 @@ def main():
             target_col = args.target_col,
             synth_size = args.synth_size,
         )
-        write_config(submission_dir, args.target_col, args.epsilon, args.num_iters)
+        write_config(submission_dir, args.target_col, args.epsilon, args.num_iters,
+                     count_file=args.count_file, annot_file=args.annot_file)
         _copy_splits_yaml(args.splits_yaml, submission_dir, args.target_col)
     else:
         df_loaded = pd.read_csv(os.path.expanduser(args.input))
@@ -472,7 +485,8 @@ def main():
             target_col = args.target_col,
             synth_size = args.synth_size,
         )
-        write_config(submission_dir, args.target_col, args.epsilon, args.num_iters)
+        write_config(submission_dir, args.target_col, args.epsilon, args.num_iters,
+                     count_file=args.count_file, annot_file=args.annot_file)
         if not _copy_splits_yaml(args.splits_yaml, submission_dir, args.target_col):
             if args.split is not None:
                 if train_ids is None:
