@@ -149,6 +149,8 @@ def attack_split(
     ref_mode:          str   = 'auto',
     ref_csv:           str   = None,
     ref_tsv:           str   = None,
+    test_tsv_override: str   = None,
+    sub_csv_override:  str   = None,
     decontaminate:     bool  = False,
     member_frac:       float = None,
 ) -> tuple:
@@ -179,11 +181,11 @@ def attack_split(
 
     target_col  = label_col if use_target_col else None
 
-    # Absolute paths
-    test_tsv  = resolve_path(competition_home, count_rel)
-    sub_csv   = resolve_path(competition_home, annot_rel)
+    # Absolute paths (CLI overrides take priority over config.yaml)
+    test_tsv  = test_tsv_override if test_tsv_override else resolve_path(competition_home, count_rel)
+    sub_csv   = sub_csv_override  if sub_csv_override  else resolve_path(competition_home, annot_rel)
 
-    # Reference TSV: look for a _reference.tsv sibling of count_file
+    # Reference TSV: look for a _reference.tsv sibling of test_tsv
     # Only use auto-detected path if no explicit --ref-tsv was passed
     ref_tsv_candidate = test_tsv.replace('.tsv', '_reference.tsv')
     ref_tsv_auto = ref_tsv_candidate if os.path.exists(ref_tsv_candidate) else None
@@ -449,6 +451,21 @@ def main():
         ),
     )
     parser.add_argument(
+        '--test-tsv', default=None,
+        help=(
+            'Override the gene-expression TSV path from config.yaml. '
+            'Also triggers auto-detection of a _reference.tsv sibling at this location. '
+            'Example: --test-tsv data/processed/TCGA-COMBINED_primary_tumor_star_deseq_VST_lmgenes.tsv'
+        ),
+    )
+    parser.add_argument(
+        '--sub-csv', default=None,
+        help=(
+            'Override the sample-annotation CSV path from config.yaml. '
+            'Example: --sub-csv data/meta/TCGA-COMBINED_primary_tumor_subtypes.csv'
+        ),
+    )
+    parser.add_argument(
         '--decontaminate', action='store_true', default=False,
         help=(
             'Estimate the non-member distribution by subtracting the member '
@@ -490,8 +507,10 @@ def main():
     print(f"  n_bins    : {args.n_bins}  (Blue Team hardcodes 4 bins)")
     print(f"  2-way marginals: {'yes, with ' + label_col if args.use_target_col else 'no (1-way only)'}")
     
-    ref_csv   = os.path.expanduser(args.ref_csv)   if args.ref_csv   else None
-    ref_tsv_override = os.path.expanduser(args.ref_tsv) if args.ref_tsv else None
+    ref_csv          = os.path.expanduser(args.ref_csv)  if args.ref_csv  else None
+    ref_tsv_override = os.path.expanduser(args.ref_tsv)  if args.ref_tsv  else None
+    test_tsv_override = os.path.expanduser(args.test_tsv) if args.test_tsv else None
+    sub_csv_override  = os.path.expanduser(args.sub_csv)  if args.sub_csv  else None
     print(f"  ref_mode  : {args.ref_mode}"
           + (f"  (overridden by --ref-csv {os.path.basename(ref_csv)})" if ref_csv else "")
           + (f"  (overridden by --ref-tsv {os.path.basename(ref_tsv_override)})" if ref_tsv_override else ""))
@@ -509,18 +528,20 @@ def main():
     rows = []
     for s in args.splits:
         m = attack_split(
-            split_idx        = s,
-            submission_dir   = submission_dir,
-            competition_home = competition_home,
-            blue_cfg         = blue_cfg,
-            output_dir       = output_dir,
-            n_bins           = args.n_bins,
-            use_target_col   = args.use_target_col,
-            ref_mode         = args.ref_mode,
-            ref_csv          = ref_csv,
-            ref_tsv          = ref_tsv_override,
-            decontaminate    = args.decontaminate,
-            member_frac      = args.member_frac,
+            split_idx         = s,
+            submission_dir    = submission_dir,
+            competition_home  = competition_home,
+            blue_cfg          = blue_cfg,
+            output_dir        = output_dir,
+            n_bins            = args.n_bins,
+            use_target_col    = args.use_target_col,
+            ref_mode          = args.ref_mode,
+            ref_csv           = ref_csv,
+            ref_tsv           = ref_tsv_override,
+            test_tsv_override = test_tsv_override,
+            sub_csv_override  = sub_csv_override,
+            decontaminate     = args.decontaminate,
+            member_frac       = args.member_frac,
         )
         if m is not None:
             rows.append({'split': s, **m})
