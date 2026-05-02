@@ -4,7 +4,7 @@ generate a synthetic dataset.
 
 Usage
 -----
-    # TCGA-BRCA (label column = Subtype):
+    # Single combined CSV (label column = Subtype):
     python3 run_privatepgm.py \\
         --input  /path/to/real_train.csv \\
         --output /path/to/syn_train_privatepgm_eps10.0_iters10000.csv \\
@@ -16,9 +16,16 @@ Usage
         --output /path/to/miav_sweep_01_comb/syn_train_privatepgm_eps10.0_iters10000.csv \\
         --epsilon 10.0 --num-iters 10000 --target-col cancer_type
 
+    # Split-dir layout (X_train / y_train / column_names separate files):
+    python3 run_privatepgm.py \\
+        --split-dir PPML-H_data_splits/TCGA-COMBINED/real \\
+        --split 1 \\
+        --output submission/internal_fixed/blueteam_PPML-Huskies_TCGA-COMBINED/synthetic_data_split_1.csv \\
+        --epsilon 10.0 --num-iters 10000 --target-col cancer_type
+
 Pipeline
 --------
-1. Load CSV  →  detect / validate target column
+1. Load CSV (or merge X_train + y_train + column_names)  →  detect / validate target column
 2. Ordinal-encode target column (sorted labels → 0..K-1)
 3. Quantile-discretize all gene columns into n_bins equal-depth bins (0..n_bins-1)
 4. Build reprosyn metadata  →  run PRIVATEPGM
@@ -46,6 +53,70 @@ sys.path.append(os.path.join(_HERE, 'reprosyn-main/src/'))
 
 import mbi_patch  # noqa: F401 — patches mbi imports
 import privatepgm as pgm_module
+
+
+# ---------------------------------------------------------------------------
+# Split-dir loader (X_train / y_train / column_names layout)
+# ---------------------------------------------------------------------------
+
+def load_split(split_dir: str, split: int, target_col: str) -> pd.DataFrame:
+    """Merge X_train_real_split_N.csv + y_train_real_split_N.csv + column_names.csv.
+
+    Expected files in split_dir:
+      column_names.csv            — one ENSG ID per row (header = 'column_names')
+      X_train_real_split_N.csv    — float matrix, NO header row (rows = samples)
+      y_train_real_split_N.csv    — label column, with or without header
+
+    Returns a combined DataFrame with ENSG columns + target_col.
+    """
+    col_names_path = os.path.join(split_dir, 'column_names.csv')
+    x_path         = os.path.join(split_dir, f'X_train_real_split_{split}.csv')
+    y_path         = os.path.join(split_dir, f'y_train_real_split_{split}.csv')
+
+    for p in [col_names_path, x_path, y_path]:
+        if not os.path.exists(p):
+            raise FileNotFoundError(f"Required file not found: {p}")
+
+    # Column names: one ENSG ID per row, header line is 'column_names'
+    col_df    = pd.read_csv(col_names_path)
+    gene_cols = col_df.iloc[:, 0].tolist()
+
+    # X matrix: try with header first; fall back to headerless
+    x_peek = pd.read_csv(x_path, nrows=1)
+    if str(x_peek.columns[0]).startswith('ENSG'):
+        X = pd.read_csv(x_path)
+        X = X[[c for c in gene_cols if c in X.columns]]  # reorder to column_names order
+    else:
+        X = pd.read_csv(x_path, header=None)
+        if X.shape[1] != len(gene_cols):
+            raise ValueError(
+                f"X_train has {X.shape[1]} columns but column_names.csv has "
+                f"{len(gene_cols)} entries."
+            )
+        X.columns = gene_cols
+
+    # y labels: single column, may or may not have a header
+    y_peek = pd.read_csv(y_path, nrows=1)
+    first_val = str(y_peek.iloc[0, 0])
+    # If the first value looks like a cancer-type label (not a number), file has NO header
+    try:
+        float(first_val)
+        # numeric first value → treat as headerless
+        y = pd.read_csv(y_path, header=None, names=[target_col])
+    except ValueError:
+        # non-numeric first value → file has a proper header row
+        y = pd.read_csv(y_path)
+        y.columns = [target_col]
+
+    if len(X) != len(y):
+        raise ValueError(f"X ({len(X)} rows) and y ({len(y)} rows) have different lengths.")
+
+    df = X.copy()
+    df[target_col] = y[target_col].values
+    print(f"  Split-dir load: {df.shape}  "
+          f"genes={len(gene_cols)}  "
+          f"{target_col} dist: {df[target_col].value_counts().to_dict()}")
+    return df
 
 
 # ---------------------------------------------------------------------------
@@ -102,24 +173,32 @@ def build_metadata(gene_cols: list, target_col: str,
 # Main
 # ---------------------------------------------------------------------------
 
-def run(input_csv:   str,
-        output_csv:  str,
+def run(output_csv:  str,
         epsilon:     float,
         delta:       float,
         num_iters:   int,
         n_bins:      int,
         target_col:  str,
-        synth_size:  int | None):
+        synth_size:  int | None,
+        input_csv:   str | None = None,
+        df:          pd.DataFrame | None = None):
+    """Train Private-PGM and save synthetic CSV.
 
+    Supply exactly one of `input_csv` (path to combined CSV) or `df`
+    (pre-loaded DataFrame, e.g. from load_split()).
+    """
     print(f"\n{'='*65}")
     print(f"Private-PGM  |  ε={epsilon}  δ={delta}  iters={num_iters}  bins={n_bins}")
-    print(f"  Input : {input_csv}")
+    print(f"  Input : {input_csv or '(pre-loaded DataFrame)'}")
     print(f"  Output: {output_csv}")
     print(f"{'='*65}")
 
     # ---- Load -----------------------------------------------------------
-    df = pd.read_csv(input_csv)
-    print(f"  Loaded: {df.shape}  columns (first 5): {list(df.columns[:5])}")
+    if df is None:
+        if input_csv is None:
+            raise ValueError("Provide either input_csv or df.")
+        df = pd.read_csv(input_csv)
+        print(f"  Loaded: {df.shape}  columns (first 5): {list(df.columns[:5])}")
 
     # ---- Detect target column ------------------------------------------
     if target_col not in df.columns:
@@ -197,8 +276,18 @@ def main():
         description="Run Private-PGM on a gene-expression CSV",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument('--input',      required=True,
-                        help='Path to real_train.csv')
+
+    # ---- Input: either a single combined CSV or a split-dir layout ----
+    input_grp = parser.add_mutually_exclusive_group(required=True)
+    input_grp.add_argument('--input',
+                           help='Path to combined real_train.csv '
+                                '(gene columns + label column)')
+    input_grp.add_argument('--split-dir',
+                           help='Directory containing X_train_real_split_N.csv, '
+                                'y_train_real_split_N.csv, and column_names.csv')
+
+    parser.add_argument('--split',      type=int, default=None,
+                        help='Split number to use with --split-dir (e.g. 1)')
     parser.add_argument('--output',     required=True,
                         help='Path for the output synthetic CSV')
     parser.add_argument('--epsilon',    type=float, default=10.0,
@@ -218,16 +307,35 @@ def main():
                              '(default: same as training set size)')
     args = parser.parse_args()
 
-    run(
-        input_csv   = os.path.expanduser(args.input),
-        output_csv  = os.path.expanduser(args.output),
-        epsilon     = args.epsilon,
-        delta       = args.delta,
-        num_iters   = args.num_iters,
-        n_bins      = args.n_bins,
-        target_col  = args.target_col,
-        synth_size  = args.synth_size,
-    )
+    if args.split_dir:
+        if args.split is None:
+            parser.error('--split is required when using --split-dir')
+        df = load_split(
+            split_dir  = os.path.expanduser(args.split_dir),
+            split      = args.split,
+            target_col = args.target_col,
+        )
+        run(
+            df         = df,
+            output_csv = os.path.expanduser(args.output),
+            epsilon    = args.epsilon,
+            delta      = args.delta,
+            num_iters  = args.num_iters,
+            n_bins     = args.n_bins,
+            target_col = args.target_col,
+            synth_size = args.synth_size,
+        )
+    else:
+        run(
+            input_csv  = os.path.expanduser(args.input),
+            output_csv = os.path.expanduser(args.output),
+            epsilon    = args.epsilon,
+            delta      = args.delta,
+            num_iters  = args.num_iters,
+            n_bins     = args.n_bins,
+            target_col = args.target_col,
+            synth_size = args.synth_size,
+        )
 
 
 if __name__ == '__main__':
