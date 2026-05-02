@@ -52,7 +52,8 @@ def find_tsv(folder: str, suffix: str = '') -> str | None:
 
 def load_tsv(path: str) -> pd.DataFrame:
     df = pd.read_csv(path, sep='\t', index_col=0)
-    if df.shape[1] > df.shape[0]:          # genes×samples → transpose
+    # If the row index looks like ENSG gene IDs the file is genes×samples — transpose
+    if str(df.index[0]).startswith('ENSG'):
         df = df.T
     return df
 
@@ -116,6 +117,9 @@ def attack(submission_dir: str, split: int, output_csv: str,
     else:
         ref = targets.copy()
         print(f"  Ref    : using full test TSV as P_ref (no reference TSV found)")
+        print(f"  WARNING: P_ref = full test pool → bins fitted on same data → "
+              f"P_ref ≈ uniform → 1-way LR signal collapses. "
+              f"Attack will have near-zero power without a clean reference.")
 
     synth  = pd.read_csv(synth_path)
     labels = pd.read_csv(labels_path)
