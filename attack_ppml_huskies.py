@@ -151,6 +151,7 @@ def attack_split(
     ref_tsv:           str   = None,
     test_tsv_override: str   = None,
     sub_csv_override:  str   = None,
+    splits_yaml_override: str = None,
     decontaminate:     bool  = False,
     member_frac:       float = None,
 ) -> tuple:
@@ -195,7 +196,9 @@ def attack_split(
     # ---- Submission files -------------------------------------------
     synth_path  = os.path.join(submission_dir, f'synthetic_data_split_{split_idx}.csv')
     labels_path = os.path.join(submission_dir, f'synthetic_labels_split_{split_idx}.csv')
-    splits_yaml = os.path.join(submission_dir, f'{dataset}_splits.yaml')
+    splits_yaml = (splits_yaml_override
+                   if splits_yaml_override
+                   else os.path.join(submission_dir, f'{dataset}_splits.yaml'))
 
     for p in [synth_path, test_tsv, sub_csv]:
         if not os.path.exists(p):
@@ -466,6 +469,14 @@ def main():
         ),
     )
     parser.add_argument(
+        '--splits-yaml', default=None,
+        help=(
+            'Path to the splits YAML with train_index/test_index per split. '
+            'Overrides the default lookup in the submission dir. '
+            'Example: --splits-yaml /path/to/split_indices/TCGA-COMBINED_splits.yaml'
+        ),
+    )
+    parser.add_argument(
         '--decontaminate', action='store_true', default=False,
         help=(
             'Estimate the non-member distribution by subtracting the member '
@@ -507,10 +518,11 @@ def main():
     print(f"  n_bins    : {args.n_bins}  (Blue Team hardcodes 4 bins)")
     print(f"  2-way marginals: {'yes, with ' + label_col if args.use_target_col else 'no (1-way only)'}")
     
-    ref_csv          = os.path.expanduser(args.ref_csv)  if args.ref_csv  else None
-    ref_tsv_override = os.path.expanduser(args.ref_tsv)  if args.ref_tsv  else None
-    test_tsv_override = os.path.expanduser(args.test_tsv) if args.test_tsv else None
-    sub_csv_override  = os.path.expanduser(args.sub_csv)  if args.sub_csv  else None
+    ref_csv              = os.path.expanduser(args.ref_csv)     if args.ref_csv     else None
+    ref_tsv_override     = os.path.expanduser(args.ref_tsv)     if args.ref_tsv     else None
+    test_tsv_override    = os.path.expanduser(args.test_tsv)    if args.test_tsv    else None
+    sub_csv_override     = os.path.expanduser(args.sub_csv)     if args.sub_csv     else None
+    splits_yaml_override = os.path.expanduser(args.splits_yaml) if args.splits_yaml else None
     print(f"  ref_mode  : {args.ref_mode}"
           + (f"  (overridden by --ref-csv {os.path.basename(ref_csv)})" if ref_csv else "")
           + (f"  (overridden by --ref-tsv {os.path.basename(ref_tsv_override)})" if ref_tsv_override else ""))
@@ -528,20 +540,21 @@ def main():
     rows = []
     for s in args.splits:
         m = attack_split(
-            split_idx         = s,
-            submission_dir    = submission_dir,
-            competition_home  = competition_home,
-            blue_cfg          = blue_cfg,
-            output_dir        = output_dir,
-            n_bins            = args.n_bins,
-            use_target_col    = args.use_target_col,
-            ref_mode          = args.ref_mode,
-            ref_csv           = ref_csv,
-            ref_tsv           = ref_tsv_override,
-            test_tsv_override = test_tsv_override,
-            sub_csv_override  = sub_csv_override,
-            decontaminate     = args.decontaminate,
-            member_frac       = args.member_frac,
+            split_idx            = s,
+            submission_dir       = submission_dir,
+            competition_home     = competition_home,
+            blue_cfg             = blue_cfg,
+            output_dir           = output_dir,
+            n_bins               = args.n_bins,
+            use_target_col       = args.use_target_col,
+            ref_mode             = args.ref_mode,
+            ref_csv              = ref_csv,
+            ref_tsv              = ref_tsv_override,
+            test_tsv_override    = test_tsv_override,
+            sub_csv_override     = sub_csv_override,
+            splits_yaml_override = splits_yaml_override,
+            decontaminate        = args.decontaminate,
+            member_frac          = args.member_frac,
         )
         if m is not None:
             rows.append({'split': s, **m})
