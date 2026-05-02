@@ -39,6 +39,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
+import yaml
 
 warnings.filterwarnings("ignore")
 
@@ -271,6 +272,101 @@ def run(output_csv:  str,
     print(f"{'='*65}\n")
 
 
+# ---------------------------------------------------------------------------
+# Config + splits YAML helpers
+# ---------------------------------------------------------------------------
+
+_DATASET_DEFAULTS = {
+    'TCGA-BRCA': {
+        'subtype_col_name': 'Subtype',
+        'count_file': 'data/processed/TCGA-BRCA_primary_tumor_star_deseq_VST_lmgenes.tsv',
+        'annot_file': 'data/meta/TCGA-BRCA_primary_tumor_subtypes.csv',
+    },
+    'TCGA-COMBINED': {
+        'subtype_col_name': 'cancer_type',
+        'count_file': 'data/processed/TCGA-COMBINED_primary_tumor_star_deseq_VST_lmgenes.tsv',
+        'annot_file': 'data/meta/TCGA-COMBINED_primary_tumor_subtypes.csv',
+    },
+}
+
+def _infer_dataset(target_col: str) -> str:
+    return 'TCGA-BRCA' if target_col == 'Subtype' else 'TCGA-COMBINED'
+
+
+def write_config(submission_dir: str, target_col: str, epsilon: float,
+                 num_iters: int) -> str:
+    dataset = _infer_dataset(target_col)
+    d = _DATASET_DEFAULTS[dataset]
+    cfg = {
+        'dataset_config': {
+            'name': dataset,
+            'subtype_col_name': d['subtype_col_name'],
+            'count_file': d['count_file'],
+            'annot_file': d['annot_file'],
+        },
+        'pgg_pgm_config': {
+            'epsilon': epsilon,
+            'iterations': num_iters,
+        },
+    }
+    out = os.path.join(submission_dir, 'config.yaml')
+    with open(out, 'w') as f:
+        yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
+    print(f"  Wrote config        → {out}")
+    return out
+
+
+def write_splits(submission_dir: str, split: int, train_ids: list,
+                 test_tsv: str | None, target_col: str) -> str | None:
+    dataset = _infer_dataset(target_col)
+
+    # Non-members: all candidates in test TSV that are not in train set
+    if test_tsv and os.path.exists(test_tsv):
+        peek = pd.read_csv(test_tsv, sep='\t', index_col=0, nrows=2)
+        if str(peek.index[0]).startswith('ENSG'):
+            full = pd.read_csv(test_tsv, sep='\t', index_col=0)
+            all_ids = list(full.columns)
+        else:
+            full = pd.read_csv(test_tsv, sep='\t', index_col=0, usecols=[0])
+            all_ids = list(full.index)
+        train_set  = set(train_ids)
+        members    = [sid for sid in train_ids if sid in set(all_ids)]
+        non_members = [sid for sid in all_ids if sid not in train_set]
+        print(f"  Splits ({split}): {len(members)} members, "
+              f"{len(non_members)} non-members  (from test TSV)")
+    else:
+        # No TSV available — write train_index only; attack will treat rest as members
+        members     = train_ids
+        non_members = []
+        if test_tsv:
+            print(f"  WARNING: test TSV not found at {test_tsv} — "
+                  f"writing train_index only (no test_index)")
+        else:
+            print(f"  NOTE: no --test-tsv given — writing train_index only")
+
+    splits_data = {
+        'splits': {
+            f'split_{split}': {
+                'train_index': members,
+                **(({'test_index': non_members}) if non_members else {}),
+            }
+        }
+    }
+
+    out = os.path.join(submission_dir, f'{dataset}_splits.yaml')
+    # Merge with existing YAML if present (other splits already written)
+    if os.path.exists(out):
+        with open(out) as f:
+            existing = yaml.safe_load(f) or {}
+        existing.setdefault('splits', {}).update(splits_data['splits'])
+        splits_data = existing
+
+    with open(out, 'w') as f:
+        yaml.dump(splits_data, f, default_flow_style=False, sort_keys=False)
+    print(f"  Wrote splits YAML   → {out}")
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run Private-PGM on a gene-expression CSV",
@@ -305,7 +401,14 @@ def main():
     parser.add_argument('--synth-size', type=int, default=None,
                         help='Number of synthetic rows to generate '
                              '(default: same as training set size)')
+    parser.add_argument('--test-tsv', default=None,
+                        help='Path to the full gene-expression TSV (all candidate samples). '
+                             'Used to derive test_index (non-members) in the splits YAML. '
+                             'If omitted, splits YAML will contain train_index only.')
     args = parser.parse_args()
+
+    output_csv = os.path.expanduser(args.output)
+    submission_dir = os.path.dirname(os.path.abspath(output_csv))
 
     if args.split_dir:
         if args.split is None:
@@ -317,7 +420,7 @@ def main():
         )
         run(
             df         = df,
-            output_csv = os.path.expanduser(args.output),
+            output_csv = output_csv,
             epsilon    = args.epsilon,
             delta      = args.delta,
             num_iters  = args.num_iters,
@@ -325,10 +428,27 @@ def main():
             target_col = args.target_col,
             synth_size = args.synth_size,
         )
+        write_config(submission_dir, args.target_col, args.epsilon, args.num_iters)
+        # Splits YAML needs real sample IDs — only possible if test TSV is given
+        # (X_train in split-dir format has no row sample IDs, so we derive members
+        #  as the intersection of test-TSV IDs that match by position, which is
+        #  only meaningful when the TSV row order matches the training set).
+        # Most reliable: skip splits YAML here and use write_splits.py separately.
+        if args.test_tsv:
+            print("  NOTE: split-dir X_train has no sample IDs — "
+                  "splits YAML requires a separate run of write_splits.py "
+                  "with --train-csvs pointing to a CSV that has TCGA IDs as its index.")
     else:
+        df_loaded = pd.read_csv(os.path.expanduser(args.input))
+        # Extract sample IDs if the first column is non-numeric (TCGA-xxx IDs)
+        first_col = df_loaded.columns[0]
+        if not first_col.startswith('ENSG') and not pd.api.types.is_numeric_dtype(df_loaded[first_col]):
+            train_ids = list(df_loaded[first_col])
+        else:
+            train_ids = None
         run(
-            input_csv  = os.path.expanduser(args.input),
-            output_csv = os.path.expanduser(args.output),
+            df         = df_loaded,
+            output_csv = output_csv,
             epsilon    = args.epsilon,
             delta      = args.delta,
             num_iters  = args.num_iters,
@@ -336,6 +456,14 @@ def main():
             target_col = args.target_col,
             synth_size = args.synth_size,
         )
+        write_config(submission_dir, args.target_col, args.epsilon, args.num_iters)
+        if args.split is not None:
+            if train_ids is None:
+                print("  NOTE: no string sample IDs found in input CSV — skipping splits YAML")
+            else:
+                write_splits(submission_dir, args.split, train_ids,
+                             os.path.expanduser(args.test_tsv) if args.test_tsv else None,
+                             args.target_col)
 
 
 if __name__ == '__main__':
