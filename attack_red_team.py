@@ -51,7 +51,7 @@ def activate(scores: np.ndarray, confidence: float = 1.0,
     """
     zscores = stats.zscore(scores)
     center  = np.percentile(zscores, nonmember_pct)
-    return 1.0 / (1.0 + np.exp(-confidence * (zscores - center)))
+    return 1.0 / (1.0 + np.exp(confidence * (zscores - center)))
 
 
 # ---------------------------------------------------------------------------
