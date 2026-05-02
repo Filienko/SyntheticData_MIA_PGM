@@ -148,6 +148,7 @@ def attack_split(
     use_target_col:    bool,
     ref_mode:          str   = 'auto',
     ref_csv:           str   = None,
+    ref_tsv:           str   = None,
     decontaminate:     bool  = False,
     member_frac:       float = None,
 ) -> tuple:
@@ -248,6 +249,11 @@ def attack_split(
         if target_col and (ref[label_col] == 'Unknown').all():
             print(f"  Warning: ref_csv has no '{label_col}' labels — "
                   f"2-way marginals degraded.")
+    elif ref_tsv:
+        ref = load_tsv_with_subtypes(ref_tsv, sub_csv)
+        print(f"  --ref-tsv → P_ref = {os.path.basename(ref_tsv)}  "
+              f"(n={ref.shape[0]}, '{label_col}' known: "
+              f"{(ref[label_col] != 'Unknown').sum() if label_col in ref.columns else 0})")
     elif ref_mode == 'full':
         ref = targets.copy()
         print(f"  ref_mode=full → P_ref = full test TSV  "
@@ -431,6 +437,15 @@ def main():
         ),
     )
     parser.add_argument(
+        '--ref-tsv', default=None,
+        help=(
+            'Path to a TSV file to use as P_ref. '
+            'Loaded via load_tsv_with_subtypes (handles genes×samples transpose). '
+            'Use this for the competition _reference.tsv when auto-detection misses it. '
+            'Example: --ref-tsv data/processed/TCGA-COMBINED_primary_tumor_star_deseq_VST_lmgenes_reference.tsv'
+        ),
+    )
+    parser.add_argument(
         '--decontaminate', action='store_true', default=False,
         help=(
             'Estimate the non-member distribution by subtracting the member '
@@ -473,8 +488,10 @@ def main():
     print(f"  2-way marginals: {'yes, with ' + label_col if args.use_target_col else 'no (1-way only)'}")
     
     ref_csv   = os.path.expanduser(args.ref_csv)   if args.ref_csv   else None
+    ref_tsv_override = os.path.expanduser(args.ref_tsv) if args.ref_tsv else None
     print(f"  ref_mode  : {args.ref_mode}"
-          + (f"  (overridden by --ref-csv {os.path.basename(ref_csv)})" if ref_csv else ""))
+          + (f"  (overridden by --ref-csv {os.path.basename(ref_csv)})" if ref_csv else "")
+          + (f"  (overridden by --ref-tsv {os.path.basename(ref_tsv_override)})" if ref_tsv_override else ""))
     
     if ref_csv:
         print(f"  ref_csv   : {ref_csv}")
@@ -498,6 +515,7 @@ def main():
             use_target_col   = args.use_target_col,
             ref_mode         = args.ref_mode,
             ref_csv          = ref_csv,
+            ref_tsv          = ref_tsv_override,
             decontaminate    = args.decontaminate,
             member_frac      = args.member_frac,
         )
