@@ -28,6 +28,7 @@ import glob
 
 import numpy as np
 import pandas as pd
+from scipy import stats
 
 warnings.filterwarnings("ignore")
 
@@ -36,6 +37,21 @@ sys.path.append('reprosyn-main/src/reprosyn/methods/mbi/')
 
 import mbi_patch  # noqa: F401
 from attack_submission import encode_all, build_focal_points, mama_mia_score
+
+
+def activate(scores: np.ndarray, confidence: float = 1.0,
+             nonmember_pct: float = 20.0) -> np.ndarray:
+    """Convert log-LR scores to sigmoid-activated membership probabilities.
+
+    Centers the sigmoid at the nonmember_pct-th percentile to account for
+    the known ~80/20 member/non-member split: samples below that percentile
+    are pushed toward 0 (non-member) and above toward 1 (member).
+
+    Scores are already in log space (sum of log-LRs), so no extra log needed.
+    """
+    zscores = stats.zscore(scores)
+    center  = np.percentile(zscores, nonmember_pct)
+    return 1.0 / (1.0 + np.exp(-confidence * (zscores - center)))
 
 
 # ---------------------------------------------------------------------------
@@ -162,12 +178,16 @@ def attack(submission_dir: str, split: int, output_csv: str,
     fps    = build_focal_points(gene_cols, target_col)
     scores = mama_mia_score(synth_enc, ref_enc, targets_enc, fps)
 
-    print(f"\n  Score range: [{scores.min():.4f}, {scores.max():.4f}]")
-    print(f"  Targets    : {len(scores)} samples")
+    probs = activate(scores, confidence=1.0, nonmember_pct=20.0)
+
+    print(f"\n  Score range : [{scores.min():.4f}, {scores.max():.4f}]")
+    print(f"  Prob  range : [{probs.min():.4f}, {probs.max():.4f}]")
+    print(f"  Prob  mean  : {probs.mean():.4f}  (expect ~0.80 if signal present)")
+    print(f"  Targets     : {len(scores)} samples")
 
     # ---- Save ------------------------------------------------------------
     os.makedirs(os.path.dirname(os.path.abspath(output_csv)), exist_ok=True)
-    pd.DataFrame({'membership_label': scores},
+    pd.DataFrame({'membership_label': probs},
                  index=targets.index).to_csv(output_csv, index=False)
     print(f"  Saved → {output_csv}")
 
